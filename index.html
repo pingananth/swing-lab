@@ -25,6 +25,8 @@ h1{font-size:22px;line-height:1.1}
 #target{font-size:20px;font-weight:800;color:var(--ball)}
 .big.flash #target{color:#13240a}
 #testOut{font-weight:700;font-variant-numeric:tabular-nums}
+#room{font:inherit;font-size:22px;font-weight:800;letter-spacing:6px;text-transform:uppercase;text-align:center;background:transparent;color:var(--ink);border:1.5px solid var(--line);border-radius:12px;min-height:48px;padding:8px;-webkit-user-select:text;user-select:text}
+#room:focus-visible{outline:3px solid var(--ball);outline-offset:2px}
 button{font:inherit;font-weight:700;border:0;border-radius:12px;padding:12px 14px;min-height:48px;cursor:pointer;color:var(--ink)}
 button:focus-visible{outline:3px solid var(--ball);outline-offset:2px}
 button:disabled{opacity:.6}
@@ -50,7 +52,7 @@ ol:empty::before{content:"No swings yet.";color:var(--mute);margin-left:-22px}
 <main>
   <div>
     <h1>Swing Lab</h1>
-    <p class="sub">MVP 1.1: your phone as a racket. Live sensor data and swing detection.</p>
+    <p class="sub">MVP 2: your phone as a racket, now linked to a big screen.</p>
   </div>
 
   <p class="warn" id="warn" hidden></p>
@@ -63,6 +65,16 @@ ol:empty::before{content:"No swings yet.";color:var(--mute);margin-left:-22px}
   </section>
 
   <button class="primary" id="start">Start sensors</button>
+
+  <section class="card">
+    <h2>Connect to the big screen</h2>
+    <p class="tip">On the laptop, open <b id="screenUrl">screen.html</b>. Type the 4-letter code it shows, or scan its QR code with this phone.</p>
+    <div class="row">
+      <input id="room" maxlength="4" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="CODE" aria-label="Screen code">
+      <button class="ghost" id="connect">Connect</button>
+    </div>
+    <p class="tip" id="linkState">Not connected.</p>
+  </section>
 
   <section class="card">
     <h2>Teach it your shots</h2>
@@ -111,6 +123,7 @@ ol:empty::before{content:"No swings yet.";color:var(--mute);margin-left:-22px}
   <p class="tip">Safety: hold tight, or use a case with a wrist strap. Stand well clear of the TV and of people.</p>
 </main>
 
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 {
 const $ = id => document.getElementById(id);
@@ -179,7 +192,9 @@ function classify(u) {
   return { type: 'Swing ' + AX[i] + (u[i] >= 0 ? '+' : '−'), clarity: null };
 }
 
-$('start').addEventListener('click', async () => {
+let running = false;
+async function startSensors() {
+  if (running) return;
   try {
     if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
       const r = await DeviceMotionEvent.requestPermission();   // iPhone asks here
@@ -191,6 +206,44 @@ $('start').addEventListener('click', async () => {
   window.addEventListener('devicemotion', onMotion);
   $('start').textContent = 'Sensors running: swing!'; $('start').disabled = true;
   setTimeout(() => { if (events === 0) warn('No sensor data is arriving. Check the address starts with https:// and that motion access is allowed in browser settings.'); }, 1500);
+  running = true;
+}
+$('start').addEventListener('click', startSensors);
+
+// ---- MVP 2: link to the big screen (WebRTC through PeerJS) ----
+const PREFIX = 'simul-swing-';
+let peer = null, conn = null, lastCode = '';
+const link = t => { $('linkState').textContent = t; };
+const send = d => { if (conn && conn.open) { try { conn.send(d); } catch (e) {} } };
+$('screenUrl').textContent = location.host + location.pathname.replace(/index\.html$/, '') + 'screen.html';
+const hm = location.hash.match(/^#([A-Za-z]{4})$/);
+if (hm) { $('room').value = hm[1].toUpperCase(); link('Code ' + hm[1].toUpperCase() + ' filled in from the QR. Tap Connect.'); }
+
+$('connect').addEventListener('click', async () => {
+  const code = $('room').value.trim().toUpperCase();
+  if (!/^[A-Z]{4}$/.test(code)) { link('Type the 4-letter code shown on the screen.'); return; }
+  if (typeof Peer === 'undefined') { link('The connection library did not load. Check the internet, then reload.'); return; }
+  await startSensors();
+  lastCode = code;
+  if (conn) { try { conn.close(); } catch (e) {} conn = null; }
+  if (!peer || peer.destroyed) {
+    peer = new Peer();
+    peer.on('error', e => link(e.type === 'peer-unavailable' ? 'No screen found with code ' + lastCode + '. Check the code on the laptop.' : 'Connection error: ' + e.type));
+    peer.on('disconnected', () => { try { peer.reconnect(); } catch (e) {} });
+  }
+  link('Connecting to ' + code + '…');
+  const go = () => {
+    const c = peer.connect(PREFIX + code, { serialization: 'json' });
+    conn = c;
+    c.on('open', () => { link('Connected to ' + code + '. Swing!'); $('connect').textContent = 'Reconnect'; });
+    c.on('data', d => {
+      if (!d || typeof d !== 'object') return;
+      if (d.t === 'ping') c.send({ t: 'pong', ts: d.ts });
+      else if (d.t === 'lat') link('Connected to ' + code + ' · delay ' + (+d.ms) + ' ms');
+    });
+    c.on('close', () => { if (conn === c) { conn = null; link('Disconnected. Tap Connect again.'); } });
+  };
+  if (peer.open) go(); else peer.once('open', go);
 });
 
 function onMotion(e) {
@@ -206,6 +259,7 @@ function onMotion(e) {
   const mag = Math.hypot(a, b, g);
   Object.assign(live, { a, b, g, x: acc ? acc.x : 0, y: acc ? acc.y : 0, z: acc ? acc.z : 0 });
   hist[hi++ % hist.length] = mag;
+  if (conn && events % 2 === 0) send({ t: 'm', g: Math.round(mag) });   // ~30 updates/s to the screen
 
   // Swing detector: spin crosses threshold → track the peak → finish when it calms down
   if (!swing) {
@@ -253,6 +307,7 @@ function finish(now) {
     }
     showTarget();
   }
+  send({ t: 'swing', type, power, clarity });
   flash(type + verdict, info, power);
   const li = document.createElement('li');
   li.textContent = type + verdict + ': power ' + power + '%, ' + Math.round(s.peak) + '°/s' + (clarity != null ? ', clarity ' + clarity + '%' : '');

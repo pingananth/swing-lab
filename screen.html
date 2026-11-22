@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Swing Lab · Screen</title>
+<style>
+/* VOICE: stadium scoreboard, readable from the sofa
+   IDEA: the big screen at a tennis match
+   PICTURE: the huge shot panel that flashes when the phone swings
+   COLOUR/TYPE: court blue, deep navy, tennis-ball yellow; system sans, very large
+   LAYOUT: shot panel left, join panel right; stacks on narrow screens */
+:root{--deep:#0e2a40;--court:#1d5a85;--ball:#d9f24b;--ink:#f3f7fa;--mute:#a9c0d2;--line:rgba(255,255,255,.18);--ok:#3ccf7a;--bad:#ff7a59}
+*{box-sizing:border-box;margin:0;min-width:0}
+body{background:var(--deep);color:var(--ink);font:18px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;min-height:100vh}
+main{max-width:1240px;margin:0 auto;padding:clamp(16px,3vw,40px);display:grid;gap:20px}
+header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+h1{font-size:clamp(24px,3vw,36px);line-height:1.05}
+.top{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);gap:20px}
+@media(max-width:800px){.top{grid-template-columns:minmax(0,1fr)}}
+.big{background:var(--court);border:3px solid var(--line);border-radius:24px;min-height:min(56vh,460px);display:grid;place-content:center;text-align:center;gap:10px;padding:24px;transition:background .3s}
+.big.flash{background:var(--ball);color:#13240a;transition:none}
+.big.flash #info{color:#13240a}
+#shot{font-size:clamp(48px,9vw,120px);font-weight:900;line-height:1}
+#info{font-size:clamp(18px,2.4vw,30px);color:var(--mute);font-variant-numeric:tabular-nums}
+#count{font-size:16px;color:var(--mute)}
+.join{border:1px solid var(--line);border-radius:24px;padding:22px;display:grid;gap:14px;align-content:start}
+.join h2{font-size:18px;color:var(--mute);font-weight:600}
+#code{font-size:clamp(56px,7vw,88px);font-weight:900;letter-spacing:10px;color:var(--ball);line-height:1}
+#qr{background:#fff;border-radius:12px;padding:10px;width:max-content}
+#qr:empty{display:none}
+#url{font-size:15px;color:var(--mute);overflow-wrap:anywhere}
+.status{font-weight:700}
+.status.ok{color:var(--ok)}.status.bad{color:var(--bad)}
+.lat b{font-size:34px;font-variant-numeric:tabular-nums}
+.lat small{display:block;color:var(--mute);font-size:15px}
+.meter{border:1px solid var(--line);border-radius:18px;padding:16px 20px;display:grid;gap:10px}
+.bar{height:22px;border-radius:11px;background:rgba(255,255,255,.08);overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:var(--ball);border-radius:11px}
+.meter p{font-size:15px;color:var(--mute)}
+button{font:inherit;font-weight:700;border:1.5px solid var(--line);background:transparent;color:var(--ink);border-radius:12px;padding:10px 16px;min-height:44px;cursor:pointer}
+button:focus-visible{outline:3px solid var(--ball);outline-offset:2px}
+ol{padding-left:24px;font-size:16px;color:var(--mute);font-variant-numeric:tabular-nums;max-height:180px;overflow:auto}
+ol:empty::before{content:"Swings will appear here.";margin-left:-24px}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Swing Lab · Big screen</h1>
+    <button id="sound">Click to turn on sound</button>
+  </header>
+
+  <div class="top">
+    <section class="big" id="panel" aria-live="polite">
+      <div id="shot">Waiting</div>
+      <div id="info">Connect your phone to start</div>
+      <div id="count">0 swings</div>
+    </section>
+
+    <aside class="join">
+      <h2>On your phone, enter this code</h2>
+      <div id="code">····</div>
+      <div id="qr"></div>
+      <div id="url"></div>
+      <div class="status" id="status">Starting…</div>
+      <div class="lat"><b id="lat">n/a</b><small id="latNote">Link delay, phone to screen</small></div>
+    </aside>
+  </div>
+
+  <section class="meter">
+    <div class="bar"><i id="spin"></i></div>
+    <p>Live spin from the phone. Twist it slowly and watch how closely this bar follows your hand.</p>
+  </section>
+
+  <section class="meter">
+    <ol id="log" reversed></ol>
+  </section>
+</main>
+
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+{
+const PREFIX = 'simul-swing-';
+const LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';   // no I or O, they look like 1 and 0
+const $ = id => document.getElementById(id);
+let peer = null, conn = null, code = '', pings = [], count = 0, audio = null, spin = 0, lastSpinAt = 0;
+
+const phoneUrl = () => location.href.split('#')[0].replace(/screen\.html.*$/, '') + '#' + code;
+const setStatus = (t, cls) => { $('status').textContent = t; $('status').className = 'status ' + (cls || ''); };
+
+function start() {
+  if (typeof Peer === 'undefined') { setStatus('The connection library did not load. Check the internet, then reload.', 'bad'); return; }
+  code = Array.from({ length: 4 }, () => LETTERS[Math.floor(Math.random() * LETTERS.length)]).join('');
+  $('code').textContent = code;
+  $('url').textContent = 'Or open ' + phoneUrl().replace(/^https?:\/\//, '');
+  $('qr').innerHTML = '';
+  try { if (window.QRCode) new QRCode($('qr'), { text: phoneUrl(), width: 160, height: 160, colorDark: '#0e2a40', colorLight: '#ffffff' }); } catch (e) {}
+
+  peer = new Peer(PREFIX + code);
+  peer.on('open', () => setStatus('Waiting for phone…'));
+  peer.on('connection', c => {
+    if (conn && conn.open) conn.close();          // one phone at a time in MVP 2
+    conn = c;
+    c.on('open', () => { setStatus('Phone connected', 'ok'); pings = []; $('shot').textContent = 'Swing!'; $('info').textContent = 'Phone connected'; });
+    c.on('data', onData);
+    c.on('close', () => { if (conn === c) { conn = null; spin = 0; setStatus('Phone disconnected. Waiting…'); } });
+  });
+  peer.on('disconnected', () => { try { peer.reconnect(); } catch (e) {} });
+  peer.on('error', e => {
+    if (e.type === 'unavailable-id') { peer.destroy(); start(); return; }   // code already taken, pick another
+    setStatus('Connection error: ' + e.type + '. Reload the page to retry.', 'bad');
+  });
+}
+
+function onData(d) {
+  if (!d || typeof d !== 'object') return;
+  if (d.t === 'pong') {
+    pings.push(performance.now() - d.ts); if (pings.length > 15) pings.shift();
+    const med = [...pings].sort((a, b) => a - b)[Math.floor(pings.length / 2)];
+    const oneWay = Math.round(med / 2);
+    $('lat').textContent = oneWay + ' ms';
+    $('latNote').textContent = oneWay < 40 ? "Great: you won't feel this" : oneWay < 80 ? 'OK for a game' : 'Laggy: check the Wi-Fi';
+    try { conn.send({ t: 'lat', ms: oneWay }); } catch (e) {}
+  } else if (d.t === 'm') {
+    spin = +d.g || 0; lastSpinAt = performance.now();
+  } else if (d.t === 'swing') {
+    showSwing(d);
+  }
+}
+
+// Ping the phone every second to measure the delay
+setInterval(() => { if (conn && conn.open) { try { conn.send({ t: 'ping', ts: performance.now() }); } catch (e) {} } }, 1000);
+
+function showSwing(d) {
+  count++;
+  $('shot').textContent = String(d.type || 'Swing');
+  $('info').textContent = 'Power ' + (+d.power || 0) + '%' + (d.clarity != null ? ' · clarity ' + (+d.clarity) + '%' : '');
+  $('count').textContent = count + ' swing' + (count > 1 ? 's' : '');
+  const p = $('panel'); p.classList.add('flash'); setTimeout(() => p.classList.remove('flash'), 200);
+  const li = document.createElement('li');
+  li.textContent = $('shot').textContent + ': ' + $('info').textContent;
+  $('log').prepend(li);
+  while ($('log').children.length > 30) $('log').lastChild.remove();
+  if (audio) {
+    try {
+      const o = audio.createOscillator(), g = audio.createGain();
+      o.type = 'triangle'; o.frequency.value = 220 + (+d.power || 0) * 5;
+      g.gain.setValueAtTime(0.4, audio.currentTime); g.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.15);
+      o.connect(g).connect(audio.destination); o.start(); o.stop(audio.currentTime + 0.16);
+    } catch (e) {}
+  }
+}
+
+$('sound').addEventListener('click', () => {
+  try { if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)(); if (audio.resume) audio.resume(); $('sound').textContent = 'Sound on'; } catch (e) { $('sound').textContent = 'Sound not available'; }
+});
+
+function frame() {
+  if (performance.now() - lastSpinAt > 300) spin *= 0.85;   // fade if no data arrives
+  $('spin').style.width = Math.min(100, spin / 10) + '%';
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+start();
+}
+</script>
+</body>
+</html>
