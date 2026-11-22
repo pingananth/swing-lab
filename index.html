@@ -22,6 +22,9 @@ h1{font-size:22px;line-height:1.1}
 #shot{font-size:40px;font-weight:800;line-height:1.05}
 #shotInfo{color:var(--mute);font-size:15px}
 #count{font-size:13px;color:var(--mute)}
+#target{font-size:20px;font-weight:800;color:var(--ball)}
+.big.flash #target{color:#13240a}
+#testOut{font-weight:700;font-variant-numeric:tabular-nums}
 button{font:inherit;font-weight:700;border:0;border-radius:12px;padding:12px 14px;min-height:48px;cursor:pointer;color:var(--ink)}
 button:focus-visible{outline:3px solid var(--ball);outline-offset:2px}
 button:disabled{opacity:.6}
@@ -47,12 +50,13 @@ ol:empty::before{content:"No swings yet.";color:var(--mute);margin-left:-22px}
 <main>
   <div>
     <h1>Swing Lab</h1>
-    <p class="sub">MVP 1: your phone as a racket. Live sensor data and swing detection.</p>
+    <p class="sub">MVP 1.1: your phone as a racket. Live sensor data and swing detection.</p>
   </div>
 
   <p class="warn" id="warn" hidden></p>
 
   <section class="big" id="panel" aria-live="polite">
+    <div id="target"></div>
     <div id="shot">Ready</div>
     <div id="shotInfo">Tap Start, then swing the phone like a racket.</div>
     <div id="count">0 swings</div>
@@ -62,12 +66,20 @@ ol:empty::before{content:"No swings yet.";color:var(--mute);margin-left:-22px}
 
   <section class="card">
     <h2>Teach it your shots</h2>
-    <p class="tip">Tap below, then make 3 slow-to-medium forehands. After that, the opposite motion counts as a backhand.</p>
+    <p class="tip">Teach each shot with 3 swings, the way you'll really play. Tennis style or table-tennis style both work.</p>
     <div class="row">
-      <button class="ghost" id="teach">Teach forehand (3 swings)</button>
-      <button class="ghost" id="forget">Forget</button>
+      <button class="ghost" id="teachF">Teach forehand</button>
+      <button class="ghost" id="teachB">Teach backhand</button>
     </div>
-    <p class="tip" id="teachState">Not taught yet: swings will show the raw axis.</p>
+    <button class="ghost" id="forget">Forget both</button>
+    <p class="tip" id="teachState"></p>
+  </section>
+
+  <section class="card">
+    <h2>20-shot accuracy test</h2>
+    <p class="tip">The app calls out a random shot at the top. You play it, and it keeps the score.</p>
+    <button class="ghost" id="testBtn">Start 20-shot test</button>
+    <p id="testOut"></p>
   </section>
 
   <section class="card">
@@ -112,8 +124,10 @@ if (!window.isSecureContext) warn('This page must be opened with an https:// add
 if (!('DeviceMotionEvent' in window)) warn('This browser does not expose motion sensors. Try Chrome (Android) or Safari (iPhone).');
 
 let threshold = load('thr', 300);
-let forehand = load('fh', null);      // learned unit vector [alpha, beta, gamma]
-let teaching = 0, teachSum = [0, 0, 0];
+let forehand = load('fh', null);      // learned unit vectors [alpha, beta, gamma]
+let backhand = load('bh', null);
+let teach = null;                     // { kind: 'fh' | 'bh', left, sum }
+let test = null;                      // { seq, i, right, fb, bf }
 let swing = null, coolUntil = 0, count = 0, events = 0;
 let lastT = 0, dtAvg = 0, audio = null;
 const live = { a: 0, b: 0, g: 0, x: 0, y: 0, z: 0 };
@@ -123,14 +137,47 @@ const AX = ['α', 'β', 'γ'];
 $('thr').value = threshold; $('thrVal').textContent = threshold + '°/s';
 $('thr').addEventListener('input', e => { threshold = +e.target.value; $('thrVal').textContent = threshold + '°/s'; store('thr', threshold); });
 
-const showTeach = () => { $('teachState').textContent = forehand ? 'Forehand learned. Opposite motion = backhand.' : 'Not taught yet: swings will show the raw axis.'; };
+const showTeach = () => {
+  const f = forehand ? 'learned' : 'not taught';
+  const b = backhand ? 'learned' : forehand ? 'not taught (guessing opposite of forehand)' : 'not taught';
+  $('teachState').textContent = 'Forehand: ' + f + ' · Backhand: ' + b;
+};
 showTeach();
 
-$('teach').addEventListener('click', () => {
-  teaching = 3; teachSum = [0, 0, 0];
-  $('shot').textContent = 'Teach mode'; $('shotInfo').textContent = 'Do 3 forehands…';
+const startTeach = kind => {
+  teach = { kind, left: 3, sum: [0, 0, 0] };
+  $('shot').textContent = 'Teach mode';
+  $('shotInfo').textContent = 'Do 3 ' + (kind === 'fh' ? 'forehands' : 'backhands') + '…';
+};
+$('teachF').addEventListener('click', () => startTeach('fh'));
+$('teachB').addEventListener('click', () => startTeach('bh'));
+$('forget').addEventListener('click', () => { forehand = backhand = null; store('fh', null); store('bh', null); showTeach(); });
+
+const showTarget = () => { $('target').textContent = test ? 'Play: ' + test.seq[test.i].toUpperCase() + ' (' + (test.i + 1) + '/20)' : ''; };
+$('testBtn').addEventListener('click', () => {
+  if (!forehand && !backhand) { $('testOut').textContent = 'Teach your forehand and backhand first.'; return; }
+  const seq = [...Array(10).fill('Forehand'), ...Array(10).fill('Backhand')];
+  for (let i = seq.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [seq[i], seq[j]] = [seq[j], seq[i]]; }
+  test = { seq, i: 0, right: 0, fb: 0, bf: 0 };
+  $('testOut').textContent = ''; $('testBtn').textContent = 'Restart test';
+  showTarget();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
 });
-$('forget').addEventListener('click', () => { forehand = null; store('fh', null); showTeach(); });
+
+const dot = (p, q) => p[0] * q[0] + p[1] * q[1] + p[2] * q[2];
+function classify(u) {
+  if (forehand && backhand) {
+    const f = dot(u, forehand), b = dot(u, backhand);
+    return { type: f >= b ? 'Forehand' : 'Backhand', clarity: Math.min(100, Math.round(Math.abs(f - b) * 50)) };
+  }
+  const ref = forehand || backhand;
+  if (ref) {
+    const d = dot(u, ref), same = forehand ? 'Forehand' : 'Backhand', other = forehand ? 'Backhand' : 'Forehand';
+    return { type: d >= 0 ? same : other, clarity: Math.round(Math.abs(d) * 100) };
+  }
+  let i = 0; for (let k = 1; k < 3; k++) if (Math.abs(u[k]) > Math.abs(u[i])) i = k;
+  return { type: 'Swing ' + AX[i] + (u[i] >= 0 ? '+' : '−'), clarity: null };
+}
 
 $('start').addEventListener('click', async () => {
   try {
@@ -162,9 +209,10 @@ function onMotion(e) {
 
   // Swing detector: spin crosses threshold → track the peak → finish when it calms down
   if (!swing) {
-    if (mag > threshold && now > coolUntil) swing = { t0: now, peak: mag, vec: [a, b, g], acc: lin };
+    if (mag > threshold && now > coolUntil) swing = { t0: now, peak: mag, sum: [a, b, g], acc: lin };
   } else {
-    if (mag > swing.peak) { swing.peak = mag; swing.vec = [a, b, g]; }
+    swing.sum[0] += a; swing.sum[1] += b; swing.sum[2] += g;   // whole-swing rotation, not one sample
+    if (mag > swing.peak) swing.peak = mag;
     if (lin > swing.acc) swing.acc = lin;
     if (mag < threshold * 0.5 || now - swing.t0 > 450) finish(now);
   }
@@ -172,33 +220,42 @@ function onMotion(e) {
 
 function finish(now) {
   const s = swing; swing = null; coolUntil = now + 300;
-  const n = Math.hypot(...s.vec) || 1;
-  const u = s.vec.map(v => v / n);
+  const n = Math.hypot(...s.sum) || 1;
+  const u = s.sum.map(v => v / n);
 
-  if (teaching > 0) {
-    teachSum = teachSum.map((v, i) => v + u[i]); teaching--;
-    if (teaching === 0) {
-      const m = Math.hypot(...teachSum) || 1;
-      forehand = teachSum.map(v => v / m); store('fh', forehand); showTeach();
-      flash('Learned!', 'Now try forehands and backhands.', 70);
-    } else flash('Got it', teaching + ' more forehand' + (teaching > 1 ? 's' : ''), 50);
+  if (teach) {
+    teach.sum = teach.sum.map((v, i) => v + u[i]); teach.left--;
+    const name = teach.kind === 'fh' ? 'Forehand' : 'Backhand';
+    if (teach.left === 0) {
+      const m = Math.hypot(...teach.sum) || 1, vec = teach.sum.map(v => v / m);
+      if (teach.kind === 'fh') { forehand = vec; store('fh', vec); } else { backhand = vec; store('bh', vec); }
+      teach = null; showTeach();
+      flash(name + ' learned!', forehand && backhand ? 'Both shots taught. Try the 20-shot test.' : 'Now teach the other shot.', 70);
+    } else flash('Got it', teach.left + ' more ' + name.toLowerCase() + (teach.left > 1 ? 's' : ''), 50);
     return;
   }
 
-  let type;
-  if (forehand) {
-    const dot = u[0] * forehand[0] + u[1] * forehand[1] + u[2] * forehand[2];
-    type = dot >= 0 ? 'Forehand' : 'Backhand';
-  } else {
-    let i = 0; for (let k = 1; k < 3; k++) if (Math.abs(u[k]) > Math.abs(u[i])) i = k;
-    type = 'Swing ' + AX[i] + (u[i] >= 0 ? '+' : '−');
-  }
-  const power = Math.min(100, Math.round(s.peak / 15));      // ~1500°/s ≈ 100%
+  const { type, clarity } = classify(u);
+  const power = Math.min(100, Math.round(s.peak / 10));      // ~1000°/s ≈ 100%
   count++;
   $('count').textContent = count + ' swing' + (count > 1 ? 's' : '');
-  flash(type, 'Power ' + power + '% · peak ' + Math.round(s.peak) + '°/s', power);
+  let info = 'Power ' + power + '%' + (clarity != null ? ' · clarity ' + clarity + '%' : '');
+  let verdict = '';
+  if (test) {
+    const want = test.seq[test.i], ok = want === type;
+    if (ok) test.right++; else if (want === 'Forehand') test.fb++; else test.bf++;
+    verdict = ok ? ' ✓' : ' ✗ (asked ' + want.toLowerCase() + ')';
+    test.i++;
+    if (test.i >= 20) {
+      $('testOut').textContent = 'Score ' + test.right + '/20 · forehands read as backhand: ' + test.fb + ' · backhands read as forehand: ' + test.bf;
+      test = null; $('testBtn').textContent = 'Start 20-shot test';
+      info += ' · test done, see score below';
+    }
+    showTarget();
+  }
+  flash(type + verdict, info, power);
   const li = document.createElement('li');
-  li.textContent = type + ': power ' + power + '%, ' + Math.round(s.peak) + '°/s' + (s.acc ? ', ' + s.acc.toFixed(1) + ' m/s²' : '');
+  li.textContent = type + verdict + ': power ' + power + '%, ' + Math.round(s.peak) + '°/s' + (clarity != null ? ', clarity ' + clarity + '%' : '');
   $('log').prepend(li);
   while ($('log').children.length > 30) $('log').lastChild.remove();
 }
