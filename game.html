@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Swing Tennis · MVP 3</title>
+<style>
+/* VOICE: a living-room tennis match, big and bright for the sofa
+   IDEA: the broadcast view from behind your own baseline
+   PICTURE: the perspective court filling the screen, ball with a shadow
+   COLOUR/TYPE: hard-court blue, grass-green surround, tennis-ball yellow; system sans, heavy
+   LAYOUT: full-screen canvas, scoreboard top-left, controls top-right */
+:root{--deep:#0e2a40;--ball:#d9f24b;--ink:#f3f7fa;--mute:#a9c0d2;--line:rgba(255,255,255,.2);--panel:rgba(8,24,36,.84)}
+*{box-sizing:border-box;margin:0;min-width:0}
+html,body{height:100%}
+body{background:#0b2233;color:var(--ink);font:18px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;overflow:hidden}
+#cv{position:fixed;inset:0;width:100%;height:100%;display:block}
+.hud{position:fixed;top:clamp(10px,2vw,24px);left:clamp(10px,2vw,24px);right:clamp(10px,2vw,24px);display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;pointer-events:none}
+.hud>*{pointer-events:auto}
+.board{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:10px 16px;display:grid;grid-template-columns:auto auto auto;gap:2px 20px;font-variant-numeric:tabular-nums;font-size:clamp(16px,1.8vw,26px);font-weight:700}
+.board .h{font-size:12px;color:var(--mute);font-weight:600}
+.board b{color:var(--ball);text-align:right}
+.ctrl{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;max-width:760px}
+.ctrl button,.ctrl select,.pill{font:inherit;font-size:15px;font-weight:700;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:8px 12px;min-height:44px}
+.ctrl button,.ctrl select{cursor:pointer}
+.ctrl button:focus-visible,.ctrl select:focus-visible,.joincard button:focus-visible{outline:3px solid var(--ball);outline-offset:2px}
+.pill{display:inline-flex;align-items:center;color:var(--mute)}
+.pill.ok{color:#3ccf7a}
+#msg{position:fixed;left:50%;top:36%;transform:translate(-50%,-50%);text-align:center;font-weight:900;font-size:clamp(30px,5vw,76px);line-height:1.05;text-shadow:0 4px 20px rgba(0,0,0,.55);pointer-events:none;opacity:0;transition:opacity .25s;width:min(92vw,1000px)}
+#msg.show{opacity:1}
+#msg small{display:block;margin-top:8px;font-size:.42em;font-weight:800;color:var(--ball)}
+#join{position:fixed;inset:0;display:grid;place-items:center;background:rgba(6,18,28,.72);padding:16px}
+#join[hidden]{display:none}
+.joincard{background:var(--deep);border:1px solid var(--line);border-radius:22px;padding:28px;display:grid;gap:12px;justify-items:center;text-align:center;width:min(520px,100%)}
+.joincard h1{font-size:clamp(30px,4vw,46px);line-height:1.05}
+.joincard button{font:inherit;font-weight:700;background:transparent;color:var(--ink);border:1.5px solid var(--line);border-radius:12px;padding:10px 16px;min-height:44px;cursor:pointer}
+#code{font-size:clamp(56px,8vw,96px);font-weight:900;letter-spacing:10px;color:var(--ball);line-height:1}
+#qr{background:#fff;border-radius:12px;padding:10px}
+#qr:empty{display:none}
+.mute{color:var(--mute);font-size:15px;overflow-wrap:anywhere}
+#status{font-weight:700}
+#foot{position:fixed;bottom:10px;left:50%;transform:translateX(-50%);font-size:13px;color:var(--mute);pointer-events:none;text-align:center;width:max-content;max-width:94vw}
+@media (prefers-reduced-motion:reduce){#msg{transition:none}}
+</style>
+</head>
+<body>
+<canvas id="cv" aria-label="Tennis court"></canvas>
+
+<div class="hud">
+  <div class="board" aria-live="polite">
+    <span></span><span class="h">Games</span><span class="h">Points</span>
+    <span>You</span><b id="gY">0</b><b id="pY">0</b>
+    <span>Computer</span><b id="gC">0</b><b id="pC">0</b>
+  </div>
+  <div class="ctrl">
+    <span class="pill" id="pill">No phone</span>
+    <select id="diff" aria-label="Difficulty"><option value="0">Easy</option><option value="1">Normal</option><option value="2">Hard</option></select>
+    <button id="hand">Right-handed</button>
+    <button id="help">Helpers on</button>
+    <button id="sound">Sound off</button>
+    <button id="fs">Full screen</button>
+  </div>
+</div>
+
+<div id="msg" aria-live="polite"></div>
+
+<div id="join">
+  <div class="joincard">
+    <h1>Swing Tennis</h1>
+    <p class="mute">Scan with your phone, or type this code on the Swing Lab page</p>
+    <div id="code">····</div>
+    <div id="qr"></div>
+    <div class="mute" id="url"></div>
+    <div id="status">Starting…</div>
+    <button id="kbd">No phone? Play with the space bar</button>
+  </div>
+</div>
+
+<div id="foot">First to 3 games wins · Space bar = test swing</div>
+
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+{
+const $ = id => document.getElementById(id);
+const store = (k, v) => { try { localStorage.setItem('st-' + k, JSON.stringify(v)); } catch (e) {} };
+const load = (k, d) => { try { const v = localStorage.getItem('st-' + k); return v ? JSON.parse(v) : d; } catch (e) { return d; } };
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+// ---------- Settings ----------
+const DIFF = [
+  { name: 'Easy',   cpuD: 1750, spread: 0.50, miss: 0.22 },
+  { name: 'Normal', cpuD: 1400, spread: 0.65, miss: 0.14 },
+  { name: 'Hard',   cpuD: 1100, spread: 0.80, miss: 0.07 },
+];
+const EARLY = 380, LATE = 170, LEAD = 70, GAMES = 3;   // timing window in ms; LEAD: swing starts before impact
+let diff = clamp(+load('diff', 0) || 0, 0, 2), right = load('right', true), helpers = load('help', true);
+$('diff').value = diff;
+const showSettings = () => { $('hand').textContent = right ? 'Right-handed' : 'Left-handed'; $('help').textContent = helpers ? 'Helpers on' : 'Helpers off'; };
+showSettings();
+$('diff').addEventListener('change', e => { diff = +e.target.value; store('diff', diff); });
+$('hand').addEventListener('click', () => { right = !right; store('right', right); showSettings(); });
+$('help').addEventListener('click', () => { helpers = !helpers; store('help', helpers); showSettings(); });
+$('fs').addEventListener('click', () => { try { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen(); } catch (e) {} });
+
+// ---------- Sound ----------
+let audio = null, soundOn = false;
+const unlock = () => { try { if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)(); if (audio.resume) audio.resume(); soundOn = true; $('sound').textContent = 'Sound on'; } catch (e) {} };
+$('sound').addEventListener('click', () => { if (soundOn) { soundOn = false; $('sound').textContent = 'Sound off'; } else unlock(); });
+document.addEventListener('pointerdown', () => { if (!audio) unlock(); });
+function tone(f, dur, type, vol, slide) {
+  if (!audio || !soundOn) return;
+  try {
+    const t = audio.currentTime, o = audio.createOscillator(), g = audio.createGain();
+    o.type = type || 'sine'; o.frequency.setValueAtTime(f, t);
+    if (slide) o.frequency.exponentialRampToValueAtTime(slide, t + dur);
+    g.gain.setValueAtTime(vol || 0.3, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    o.connect(g).connect(audio.destination); o.start(t); o.stop(t + dur + 0.02);
+  } catch (e) {}
+}
+const sHit = p => tone(420 + p * 4, 0.08, 'square', 0.22, 180);
+const sBounce = () => tone(170, 0.07, 'sine', 0.3, 90);
+const sPoint = () => { tone(660, 0.12, 'triangle', 0.3); setTimeout(() => tone(880, 0.2, 'triangle', 0.3), 120); };
+const sLose = () => tone(300, 0.35, 'sawtooth', 0.12, 140);
+const sWin = () => [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => tone(f, 0.22, 'triangle', 0.3), i * 140));
+
+// ---------- Messages ----------
+const msg = $('msg'); let msgTimer = 0;
+function say(big, small, ms) {
+  msg.textContent = big || '';
+  if (small) { const s = document.createElement('small'); s.textContent = small; msg.appendChild(s); }
+  msg.classList.add('show'); clearTimeout(msgTimer);
+  if (ms) msgTimer = setTimeout(() => msg.classList.remove('show'), ms);
+}
+
+// ---------- Game state ----------
+let state = 'idle';            // idle | point | rally | over
+let ball = null, pending = null, pts = [0, 0], games = [0, 0], feedTimer = 0;
+let cpuX = 0, racketX = 0.4, swingAt = -1e9;
+const fhSign = () => (right ? 1 : -1);
+const sideOf = x => (x * fhSign() >= 0 ? 'Forehand' : 'Backhand');
+const durFor = power => 1700 - clamp(power, 10, 100) * 8;            // harder swing → faster ball
+const missChance = (power, tx) => Math.min(0.85, DIFF[diff].miss + Math.max(0, power - 60) * 0.006 + Math.abs(tx) * 0.15);
+
+function flight(x0, z0, x1, z1, D, fb, h0, h1, by) {
+  return { x0, z0, x1, z1, t0: performance.now(), D, fb, h0, h1, by, bounced: false, hit: false, resolved: false, missed: false, power: 60, tx: x1, pMiss: 0 };
+}
+// Position at time t: straight line along the ground, an arc over the net, one bounce
+function bpos(b, t) {
+  const u = (t - b.t0) / b.D;
+  const x = b.x0 + (b.x1 - b.x0) * u, z = b.z0 + (b.z1 - b.z0) * u;
+  let y;
+  if (u < b.fb) { const v = u / b.fb; y = b.h0 * (1 - v) + 0.42 * 4 * v * (1 - v); }
+  else { const v = (u - b.fb) / (1 - b.fb); y = Math.max(0, b.h1 * v + 0.35 * 4 * v * (1 - v)); }
+  return { x, z, y, u };
+}
+
+function updateBoard() {
+  const [a, b] = pts, n = ['0', '15', '30', '40'];
+  let pa, pb;
+  if (a >= 3 && b >= 3) { pa = a > b ? 'AD' : '40'; pb = b > a ? 'AD' : '40'; }
+  else { pa = n[Math.min(a, 3)]; pb = n[Math.min(b, 3)]; }
+  $('gY').textContent = games[0]; $('gC').textContent = games[1]; $('pY').textContent = pa; $('pC').textContent = pb;
+}
+function callScore() {
+  const [a, b] = pts;
+  if (a >= 3 && b >= 3) return a === b ? 'Deuce' : a > b ? 'Advantage you' : 'Advantage computer';
+  const n = ['Love', '15', '30', '40'];
+  return n[a] + ' – ' + n[b];
+}
+
+function startMatch() {
+  clearTimeout(feedTimer);
+  pts = [0, 0]; games = [0, 0]; ball = null; pending = null; updateBoard();
+  state = 'point';
+  say('Get ready!', 'Computer serves · ' + DIFF[diff].name, 1400);
+  feedTimer = setTimeout(feed, 1700);
+}
+
+function cpuShot(fromX, h0) {
+  const d = DIFF[diff];
+  let tx = (Math.random() * 2 - 1) * d.spread;
+  if (Math.abs(tx) < 0.18) tx = tx < 0 ? -0.18 : 0.18;               // always clearly one side
+  ball = flight(fromX, 1, tx, 0, d.cpuD * (0.9 + Math.random() * 0.2), 0.72, h0, 0.3, 'cpu');
+  sHit(45);
+}
+function feed() { if (state === 'over') return; state = 'rally'; cpuShot(cpuX, 0.5); }
+
+function pointTo(i, why) {
+  ball = null; pending = null; state = 'point';
+  pts[i]++;
+  const a = pts[i], b = pts[1 - i];
+  let small;
+  if (a >= 4 && a - b >= 2) {
+    games[i]++; pts = [0, 0];
+    if (games[i] >= GAMES) {
+      state = 'over'; updateBoard();
+      say(i === 0 ? 'You win the match!' : 'Computer wins the match', 'Games ' + games[0] + '–' + games[1] + ' · swing to play again', 0);
+      i === 0 ? sWin() : sLose();
+      return;
+    }
+    small = (i === 0 ? 'Game to you' : 'Game to computer') + ' · games ' + games[0] + '–' + games[1];
+  } else small = callScore();
+  updateBoard();
+  say(why, small, 1800);
+  i === 0 ? sPoint() : sLose();
+  clearTimeout(feedTimer); feedTimer = setTimeout(feed, 2100);
+}
+
+// Called the instant the phone says a swing started. recv = arrival time on this screen.
+function swingStart(recv) {
+  swingAt = performance.now();
+  if (state === 'idle' || state === 'over') { startMatch(); return false; }
+  if (state !== 'rally' || !ball || ball.by !== 'cpu' || ball.hit) return false;
+  const tS = recv - delay, tA = ball.t0 + ball.D, off = tS - tA + LEAD;
+  if (off < -EARLY) { say('', 'Too early: wait for the ball', 700); return false; }
+  if (off > LATE) return false;                                           // too late, the miss is called in tick()
+  const side = sideOf(ball.x1), sign = Math.sign(ball.x1) || 1;
+  ball.hit = true;
+  pending = { t: performance.now(), side };
+  const now = performance.now(), p = bpos(ball, now);
+  const aim = clamp(off / 180, -1, 1);                                    // early pulls cross-court, late goes down the line
+  const tx = clamp(sign * aim * 0.75 + (Math.random() - 0.5) * 0.2, -0.9, 0.9);
+  ball = flight(p.x, Math.max(0, p.z), tx, 1, durFor(60), 0.7, Math.max(0.2, p.y), 0.35, 'you');
+  ball.pMiss = missChance(60, tx);
+  sHit(60);
+  say('', Math.abs(off) < 80 ? 'Perfect timing!' : off < 0 ? 'A little early' : 'A little late', 800);
+  return true;
+}
+
+// Called when the phone sends the finished swing (shot type + power), ~0.1–0.3 s later
+function applyFinal(d) {
+  const now = performance.now();
+  if (!pending || now - pending.t > 800) { pending = null; return; }
+  const power = clamp(+d.power || 60, 10, 100);
+  const type = String(d.type || '');
+  const wrong = (type === 'Forehand' || type === 'Backhand') && type !== pending.side;
+  const eff = wrong ? Math.round(power * 0.5) : power;
+  if (ball && ball.by === 'you') {
+    const u = (now - ball.t0) / ball.D, nD = durFor(eff);
+    ball.t0 = now - u * nD; ball.D = nD; ball.power = eff; ball.pMiss = missChance(eff, ball.tx);
+  }
+  say('', wrong ? 'Weak shot: use your ' + pending.side.toLowerCase() + '!' : type + ' · power ' + power + '%', 900);
+  pending = null;
+}
+
+// ---------- Loop ----------
+function tick() {
+  const now = performance.now();
+  if (state === 'rally' && ball) {
+    const p = bpos(ball, now);
+    if (!ball.bounced && p.u >= ball.fb) { ball.bounced = true; sBounce(); }
+    if (ball.by === 'cpu') {
+      if (!ball.hit && now > ball.t0 + ball.D + LATE - LEAD + delay + 150) pointTo(1, 'Missed it!');
+    } else {
+      cpuX += (ball.x1 - cpuX) * 0.06;
+      if (p.u >= 1 && !ball.resolved) {
+        ball.resolved = true;
+        if (Math.random() < ball.pMiss) ball.missed = true; else cpuShot(clamp(p.x, -1.1, 1.1), Math.max(0.25, p.y));
+      } else if (ball.missed && p.u >= 1.35) pointTo(0, ball.power >= 80 ? 'Winner!' : 'Computer missed!');
+    }
+  }
+  draw(now);
+  requestAnimationFrame(tick);
+}
+
+// ---------- Drawing ----------
+const cv = $('cv'), ctx = cv.getContext('2d');
+let W = 0, H = 0, DPR = 1;
+const resize = () => { DPR = Math.min(2, window.devicePixelRatio || 1); W = cv.clientWidth; H = cv.clientHeight; cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR); };
+const ro = new ResizeObserver(resize); ro.observe(cv); resize();
+
+const S = z => 1 / (1 + Math.max(-0.2, z) * 3);                           // perspective scale; z=0 near baseline, z=1 far
+function P(x, z, y) {
+  const s = S(z), hY = H * 0.12, bY = H * 0.95, gy = hY + (bY - hY) * s;
+  return { x: W / 2 + x * W * 0.4 * s, y: gy - (y || 0) * H * 0.55 * s, s };
+}
+function quad(pts, fill) {
+  ctx.beginPath();
+  pts.forEach(([x, z, y], i) => { const p = P(x, z, y || 0); i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y); });
+  ctx.closePath(); ctx.fillStyle = fill; ctx.fill();
+}
+function seg(x0, z0, x1, z1) { const a = P(x0, z0, 0), b = P(x1, z1, 0); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); }
+
+function drawBall(now) {
+  if (!ball) return;
+  const p = bpos(ball, now);
+  if (p.z < -0.12 || p.z > 1.6) return;
+  const g = P(p.x, p.z, 0), b = P(p.x, p.z, p.y), r = Math.max(3, W * 0.014 * b.s);
+  ctx.fillStyle = 'rgba(0,0,0,.35)';
+  ctx.beginPath(); ctx.ellipse(g.x, g.y, r * 1.1, r * 0.45, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#d9f24b'; ctx.strokeStyle = 'rgba(0,0,0,.25)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(b.x, b.y, r, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+}
+
+function drawCpu() {
+  const p = P(cpuX, 1.05, 0), u = H * 0.55 * p.s, w = u * 0.16;
+  ctx.fillStyle = 'rgba(0,0,0,.3)'; ctx.beginPath(); ctx.ellipse(p.x, p.y, w * 1.4, w * 0.4, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#26323b'; ctx.lineWidth = Math.max(2, w * 0.35); ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(p.x - w * 0.4, p.y); ctx.lineTo(p.x - w * 0.3, p.y - u * 0.22); ctx.moveTo(p.x + w * 0.4, p.y); ctx.lineTo(p.x + w * 0.3, p.y - u * 0.22); ctx.stroke();
+  ctx.fillStyle = '#e6493a'; ctx.beginPath(); ctx.roundRect ? ctx.roundRect(p.x - w * 0.7, p.y - u * 0.48, w * 1.4, u * 0.28, w * 0.4) : ctx.rect(p.x - w * 0.7, p.y - u * 0.48, w * 1.4, u * 0.28); ctx.fill();
+  ctx.fillStyle = '#e8b98a'; ctx.beginPath(); ctx.arc(p.x, p.y - u * 0.56, w * 0.5, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#f3f7fa'; ctx.lineWidth = Math.max(1.5, w * 0.12);
+  ctx.beginPath(); ctx.ellipse(p.x + w * 1.3, p.y - u * 0.42, w * 0.35, w * 0.5, 0.3, 0, Math.PI * 2); ctx.stroke();
+}
+
+function drawRacket(now) {
+  const target = ball && ball.by === 'cpu' ? ball.x1 : 0.35 * fhSign();
+  racketX += (target - racketX) * 0.12;
+  const p = P(racketX, -0.02, 0.32), R = Math.min(W, H) * 0.06;
+  const k = clamp((now - swingAt) / 260, 0, 1), swinging = k < 1;
+  const dir = racketX * fhSign() >= 0 ? 1 : -1;
+  const ang = (swinging ? (-1.1 + 2.2 * k) : -0.5) * dir * fhSign();
+  ctx.save(); ctx.translate(p.x, p.y + R * 1.2); ctx.rotate(ang); ctx.globalAlpha = 0.9;
+  ctx.strokeStyle = '#26323b'; ctx.lineWidth = R * 0.22; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -R * 0.9); ctx.stroke();
+  ctx.fillStyle = 'rgba(243,247,250,.18)'; ctx.strokeStyle = '#f3f7fa'; ctx.lineWidth = R * 0.12;
+  ctx.beginPath(); ctx.ellipse(0, -R * 1.7, R * 0.62, R * 0.82, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  ctx.restore(); ctx.globalAlpha = 1;
+}
+
+function drawHelper(now) {
+  if (!helpers || !ball || ball.by !== 'cpu' || ball.hit || state !== 'rally') return;
+  const rem = ball.t0 + ball.D - LEAD - now;                              // ms until the ideal swing moment
+  if (rem > 1300 || rem < -LATE) return;
+  const p = P(ball.x1, 0, 0.3), base = Math.min(W, H) * 0.025;
+  const r = base + Math.max(0, rem) / 1300 * Math.min(W, H) * 0.16;
+  const ready = rem < 220;
+  ctx.strokeStyle = ready ? '#d9f24b' : 'rgba(243,247,250,.8)'; ctx.lineWidth = ready ? 5 : 3;
+  ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.stroke();
+  ctx.fillStyle = ready ? '#d9f24b' : '#f3f7fa';
+  ctx.font = '900 ' + Math.round(clamp(W * 0.028, 18, 44)) + 'px system-ui, sans-serif'; ctx.textAlign = 'center';
+  ctx.fillText(sideOf(ball.x1).toUpperCase(), p.x, p.y - r - 12);
+}
+
+function draw(now) {
+  if (!W || !H) return;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  const sky = ctx.createLinearGradient(0, 0, 0, H);
+  sky.addColorStop(0, '#0b2233'); sky.addColorStop(0.3, '#15405e'); sky.addColorStop(1, '#0b2233');
+  ctx.fillStyle = sky; ctx.fillRect(0, 0, W, H);
+  quad([[-1.6, -0.1], [1.6, -0.1], [1.6, 1.25], [-1.6, 1.25]], '#2e6b3c');          // surround
+  quad([[-1, 0], [1, 0], [1, 1], [-1, 1]], '#1d5a85');                              // court
+  ctx.strokeStyle = 'rgba(255,255,255,.92)'; ctx.lineWidth = Math.max(2, W * 0.003); ctx.beginPath();
+  seg(-1, 0, 1, 0); seg(-1, 1, 1, 1); seg(-1, 0, -1, 1); seg(1, 0, 1, 1);
+  seg(-1, 0.23, 1, 0.23); seg(-1, 0.77, 1, 0.77); seg(0, 0.23, 0, 0.77);
+  ctx.stroke();
+  drawCpu();
+  const bz = ball ? bpos(ball, now).z : 0;
+  if (ball && bz > 0.5) drawBall(now);                                    // ball beyond the net is drawn behind it
+  quad([[-1.12, 0.5, 0], [1.12, 0.5, 0], [1.12, 0.5, 0.12], [-1.12, 0.5, 0.12]], 'rgba(255,255,255,.2)');
+  ctx.strokeStyle = '#f3f7fa'; ctx.lineWidth = Math.max(2, W * 0.003);
+  const nl = P(-1.12, 0.5, 0.12), nr = P(1.12, 0.5, 0.12);
+  ctx.beginPath(); ctx.moveTo(nl.x, nl.y); ctx.lineTo(nr.x, nr.y); ctx.stroke();
+  if (ball && bz <= 0.5) drawBall(now);
+  drawHelper(now);
+  drawRacket(now);
+}
+
+// ---------- Network: same PeerJS link as MVP 2 ----------
+const PREFIX = 'simul-swing-', LETTERS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+let peer = null, conn = null, code = '', pings = [], delay = 32, gotSw0 = false, kbdMode = false;
+const phoneUrl = () => location.href.split('#')[0].replace(/[^/]*$/, '') + '#' + code;
+const setStatus = t => { $('status').textContent = t; };
+const pill = (t, ok) => { $('pill').textContent = t; $('pill').className = 'pill' + (ok ? ' ok' : ''); };
+
+function connectStart() {
+  if (typeof Peer === 'undefined') { setStatus('The connection library did not load. Check the internet, then reload.'); return; }
+  code = Array.from({ length: 4 }, () => LETTERS[Math.floor(Math.random() * LETTERS.length)]).join('');
+  $('code').textContent = code;
+  $('url').textContent = 'Or open ' + phoneUrl().replace(/^https?:\/\//, '');
+  $('qr').innerHTML = '';
+  try { if (window.QRCode) new QRCode($('qr'), { text: phoneUrl(), width: 160, height: 160, colorDark: '#0e2a40', colorLight: '#ffffff' }); } catch (e) {}
+  peer = new Peer(PREFIX + code);
+  peer.on('open', () => setStatus('Waiting for phone…'));
+  peer.on('connection', c => {
+    if (conn && conn.open) conn.close();
+    conn = c;
+    c.on('open', () => {
+      pings = []; $('join').hidden = true; pill('Phone connected', true);
+      if (state === 'idle' || state === 'over') say('Swing to start!', 'Phone connected', 0);
+    });
+    c.on('data', onData);
+    c.on('close', () => { if (conn === c) { conn = null; pill('Phone disconnected'); if (!kbdMode) $('join').hidden = false; setStatus('Phone disconnected. Waiting…'); } });
+  });
+  peer.on('disconnected', () => { try { peer.reconnect(); } catch (e) {} });
+  peer.on('error', e => {
+    if (e.type === 'unavailable-id') { peer.destroy(); connectStart(); return; }
+    setStatus('Connection error: ' + e.type + '. Reload the page to retry.');
+  });
+}
+
+function onData(d) {
+  if (!d || typeof d !== 'object') return;
+  const now = performance.now();
+  if (d.t === 'pong') {
+    pings.push(now - d.ts); if (pings.length > 15) pings.shift();
+    delay = Math.round([...pings].sort((a, b) => a - b)[Math.floor(pings.length / 2)] / 2);
+    pill('Phone · ' + delay + ' ms', true);
+    try { conn.send({ t: 'lat', ms: delay }); } catch (e) {}
+  } else if (d.t === 'sw0') {
+    gotSw0 = true; swingStart(now);
+  } else if (d.t === 'swing') {
+    if (!gotSw0) swingStart(now);                                          // older phone page without sw0
+    applyFinal(d);
+  }
+}
+setInterval(() => { if (conn && conn.open) { try { conn.send({ t: 'ping', ts: performance.now() }); } catch (e) {} } }, 1000);
+
+// Keyboard test swing: space bar
+$('kbd').addEventListener('click', () => { kbdMode = true; $('join').hidden = true; unlock(); say('Press space to start', 'Space bar = swing', 0); });
+document.addEventListener('keydown', e => {
+  if (e.code !== 'Space' || e.repeat) return;
+  e.preventDefault(); if (!audio) unlock();
+  const hit = swingStart(performance.now() + delay);
+  if (hit && pending) { const side = pending.side; setTimeout(() => applyFinal({ type: side, power: 70 }), 120); }
+});
+
+window.SwingTennis = { get state() { return state; }, get pts() { return pts; }, get games() { return games; }, get ball() { return ball; }, swingStart, applyFinal, pointTo, startMatch };
+connectStart();
+requestAnimationFrame(tick);
+}
+</script>
+</body>
+</html>

@@ -52,7 +52,7 @@ ol:empty::before{content:"No swings yet.";color:var(--mute);margin-left:-22px}
 <main>
   <div>
     <h1>Swing Lab</h1>
-    <p class="sub">MVP 2: your phone as a racket, now linked to a big screen.</p>
+    <p class="sub">MVP 3: your phone as a racket for Swing Tennis on the big screen.</p>
   </div>
 
   <p class="warn" id="warn" hidden></p>
@@ -68,7 +68,7 @@ ol:empty::before{content:"No swings yet.";color:var(--mute);margin-left:-22px}
 
   <section class="card">
     <h2>Connect to the big screen</h2>
-    <p class="tip">On the laptop, open <b id="screenUrl">screen.html</b>. Type the 4-letter code it shows, or scan its QR code with this phone.</p>
+    <p class="tip">On the laptop, open <b id="screenUrl">game.html</b> for tennis (or screen.html for the swing tester). Type the 4-letter code it shows, or scan its QR code with this phone.</p>
     <div class="row">
       <input id="room" maxlength="4" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="CODE" aria-label="Screen code">
       <button class="ghost" id="connect">Connect</button>
@@ -215,7 +215,7 @@ const PREFIX = 'simul-swing-';
 let peer = null, conn = null, lastCode = '';
 const link = t => { $('linkState').textContent = t; };
 const send = d => { if (conn && conn.open) { try { conn.send(d); } catch (e) {} } };
-$('screenUrl').textContent = location.host + location.pathname.replace(/index\.html$/, '') + 'screen.html';
+$('screenUrl').textContent = location.host + location.pathname.replace(/index\.html$/, '') + 'game.html';
 const hm = location.hash.match(/^#([A-Za-z]{4})$/);
 if (hm) { $('room').value = hm[1].toUpperCase(); link('Code ' + hm[1].toUpperCase() + ' filled in from the QR. Tap Connect.'); }
 
@@ -263,7 +263,10 @@ function onMotion(e) {
 
   // Swing detector: spin crosses threshold → track the peak → finish when it calms down
   if (!swing) {
-    if (mag > threshold && now > coolUntil) swing = { t0: now, peak: mag, sum: [a, b, g], acc: lin };
+    if (mag > threshold && now > coolUntil) {
+      swing = { t0: now, peak: mag, sum: [a, b, g], acc: lin };
+      if (!teach) send({ t: 'sw0' });                                   // instant "swing started" for game timing
+    }
   } else {
     swing.sum[0] += a; swing.sum[1] += b; swing.sum[2] += g;   // whole-swing rotation, not one sample
     if (mag > swing.peak) swing.peak = mag;
