@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Swing Lab · MVP 1</title>
+<style>
+/* VOICE: sporty, clear, a test bench you hold in your hand
+   IDEA: a hard tennis court with a scoreboard
+   PICTURE: the big shot panel that flashes on every swing
+   COLOUR/TYPE: court blue, deep navy, tennis-ball yellow; system sans
+   LAYOUT: one column for a phone held in portrait */
+:root{--deep:#0e2a40;--court:#1d5a85;--ball:#d9f24b;--ink:#f3f7fa;--mute:#a9c0d2;--line:rgba(255,255,255,.18);--warn:#6a2c12}
+*{box-sizing:border-box;margin:0;min-width:0}
+body{background:var(--deep);color:var(--ink);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+main{max-width:520px;margin:0 auto;padding:16px 16px 40px;display:grid;gap:14px}
+h1{font-size:22px;line-height:1.1}
+.sub{color:var(--mute);font-size:14px}
+.big{background:var(--court);border:2px solid var(--line);border-radius:18px;padding:18px;text-align:center;min-height:190px;display:grid;place-content:center;gap:6px;transition:background .25s}
+.big.flash{background:var(--ball);color:#13240a;transition:none}
+.big.flash #shotInfo{color:#13240a}
+#shot{font-size:40px;font-weight:800;line-height:1.05}
+#shotInfo{color:var(--mute);font-size:15px}
+#count{font-size:13px;color:var(--mute)}
+button{font:inherit;font-weight:700;border:0;border-radius:12px;padding:12px 14px;min-height:48px;cursor:pointer;color:var(--ink)}
+button:focus-visible{outline:3px solid var(--ball);outline-offset:2px}
+button:disabled{opacity:.6}
+.primary{background:var(--ball);color:#13240a;font-size:18px;width:100%}
+.ghost{background:transparent;border:1.5px solid var(--line)}
+.row{display:flex;gap:10px;flex-wrap:wrap}.row>*{flex:1 1 140px}
+.card{border:1px solid var(--line);border-radius:14px;padding:14px;display:grid;gap:10px}
+.card h2{font-size:15px;font-weight:700}
+.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;text-align:center}
+.grid b{display:block;font-size:19px;font-variant-numeric:tabular-nums}
+.grid small{color:var(--mute);font-size:12px}
+.fig{position:relative;height:120px}.fig canvas{position:absolute;inset:0;width:100%;height:100%}
+label{font-size:14px;color:var(--mute);display:flex;justify-content:space-between}
+input[type=range]{width:100%;height:32px;accent-color:var(--ball)}
+ol{padding-left:22px;font-size:14px;max-height:200px;overflow:auto;font-variant-numeric:tabular-nums}
+ol:empty::before{content:"No swings yet.";color:var(--mute);margin-left:-22px}
+.warn{background:var(--warn);border-radius:12px;padding:12px;font-size:14px}
+.warn[hidden]{display:none}
+.tip{font-size:13px;color:var(--mute)}
+</style>
+</head>
+<body>
+<main>
+  <div>
+    <h1>Swing Lab</h1>
+    <p class="sub">MVP 1: your phone as a racket. Live sensor data and swing detection.</p>
+  </div>
+
+  <p class="warn" id="warn" hidden></p>
+
+  <section class="big" id="panel" aria-live="polite">
+    <div id="shot">Ready</div>
+    <div id="shotInfo">Tap Start, then swing the phone like a racket.</div>
+    <div id="count">0 swings</div>
+  </section>
+
+  <button class="primary" id="start">Start sensors</button>
+
+  <section class="card">
+    <h2>Teach it your shots</h2>
+    <p class="tip">Tap below, then make 3 slow-to-medium forehands. After that, the opposite motion counts as a backhand.</p>
+    <div class="row">
+      <button class="ghost" id="teach">Teach forehand (3 swings)</button>
+      <button class="ghost" id="forget">Forget</button>
+    </div>
+    <p class="tip" id="teachState">Not taught yet: swings will show the raw axis.</p>
+  </section>
+
+  <section class="card">
+    <h2>Spin speed (gyroscope), last 3 seconds</h2>
+    <div class="fig"><canvas id="spark"></canvas></div>
+    <label for="thr"><span>Swing threshold</span><span id="thrVal">300°/s</span></label>
+    <input type="range" id="thr" min="120" max="900" step="10" value="300">
+    <p class="tip">Too many false swings? Raise it. Missing gentle swings? Lower it. The yellow line is the threshold.</p>
+  </section>
+
+  <section class="card">
+    <h2>Live numbers</h2>
+    <div class="grid">
+      <div><b id="ra">0</b><small>α spin °/s</small></div>
+      <div><b id="rb">0</b><small>β spin °/s</small></div>
+      <div><b id="rg">0</b><small>γ spin °/s</small></div>
+      <div><b id="ax">0</b><small>x accel m/s²</small></div>
+      <div><b id="ay">0</b><small>y accel m/s²</small></div>
+      <div><b id="az">0</b><small>z accel m/s²</small></div>
+    </div>
+    <p class="tip" id="rate">Sensor rate: n/a</p>
+  </section>
+
+  <section class="card">
+    <h2>Swing log</h2>
+    <ol id="log" reversed></ol>
+  </section>
+
+  <p class="tip">Safety: hold tight, or use a case with a wrist strap. Stand well clear of the TV and of people.</p>
+</main>
+
+<script>
+{
+const $ = id => document.getElementById(id);
+const store = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
+const load = (k, d) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } };
+
+const warnBox = $('warn');
+const warn = msg => { warnBox.textContent = msg; warnBox.hidden = false; };
+
+if (!window.isSecureContext) warn('This page must be opened with an https:// address, or the phone will not share its motion sensors.');
+if (!('DeviceMotionEvent' in window)) warn('This browser does not expose motion sensors. Try Chrome (Android) or Safari (iPhone).');
+
+let threshold = load('thr', 300);
+let forehand = load('fh', null);      // learned unit vector [alpha, beta, gamma]
+let teaching = 0, teachSum = [0, 0, 0];
+let swing = null, coolUntil = 0, count = 0, events = 0;
+let lastT = 0, dtAvg = 0, audio = null;
+const live = { a: 0, b: 0, g: 0, x: 0, y: 0, z: 0 };
+const hist = new Float32Array(180); let hi = 0;
+const AX = ['α', 'β', 'γ'];
+
+$('thr').value = threshold; $('thrVal').textContent = threshold + '°/s';
+$('thr').addEventListener('input', e => { threshold = +e.target.value; $('thrVal').textContent = threshold + '°/s'; store('thr', threshold); });
+
+const showTeach = () => { $('teachState').textContent = forehand ? 'Forehand learned. Opposite motion = backhand.' : 'Not taught yet: swings will show the raw axis.'; };
+showTeach();
+
+$('teach').addEventListener('click', () => {
+  teaching = 3; teachSum = [0, 0, 0];
+  $('shot').textContent = 'Teach mode'; $('shotInfo').textContent = 'Do 3 forehands…';
+});
+$('forget').addEventListener('click', () => { forehand = null; store('fh', null); showTeach(); });
+
+$('start').addEventListener('click', async () => {
+  try {
+    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+      const r = await DeviceMotionEvent.requestPermission();   // iPhone asks here
+      if (r !== 'granted') { warn('Motion access was denied. Close and reopen the page, then tap Allow.'); return; }
+    }
+  } catch (e) { warn('Could not ask for motion access: ' + e.message); return; }
+  try { audio = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
+  try { if (navigator.wakeLock) await navigator.wakeLock.request('screen'); } catch (e) {}
+  window.addEventListener('devicemotion', onMotion);
+  $('start').textContent = 'Sensors running: swing!'; $('start').disabled = true;
+  setTimeout(() => { if (events === 0) warn('No sensor data is arriving. Check the address starts with https:// and that motion access is allowed in browser settings.'); }, 1500);
+});
+
+function onMotion(e) {
+  events++;
+  const now = performance.now();
+  if (lastT) dtAvg = dtAvg ? dtAvg * 0.95 + (now - lastT) * 0.05 : now - lastT;
+  lastT = now;
+
+  const r = e.rotationRate || {};
+  const a = r.alpha || 0, b = r.beta || 0, g = r.gamma || 0;
+  const acc = e.acceleration && e.acceleration.x != null ? e.acceleration : null;
+  const lin = acc ? Math.hypot(acc.x, acc.y, acc.z) : 0;
+  const mag = Math.hypot(a, b, g);
+  Object.assign(live, { a, b, g, x: acc ? acc.x : 0, y: acc ? acc.y : 0, z: acc ? acc.z : 0 });
+  hist[hi++ % hist.length] = mag;
+
+  // Swing detector: spin crosses threshold → track the peak → finish when it calms down
+  if (!swing) {
+    if (mag > threshold && now > coolUntil) swing = { t0: now, peak: mag, vec: [a, b, g], acc: lin };
+  } else {
+    if (mag > swing.peak) { swing.peak = mag; swing.vec = [a, b, g]; }
+    if (lin > swing.acc) swing.acc = lin;
+    if (mag < threshold * 0.5 || now - swing.t0 > 450) finish(now);
+  }
+}
+
+function finish(now) {
+  const s = swing; swing = null; coolUntil = now + 300;
+  const n = Math.hypot(...s.vec) || 1;
+  const u = s.vec.map(v => v / n);
+
+  if (teaching > 0) {
+    teachSum = teachSum.map((v, i) => v + u[i]); teaching--;
+    if (teaching === 0) {
+      const m = Math.hypot(...teachSum) || 1;
+      forehand = teachSum.map(v => v / m); store('fh', forehand); showTeach();
+      flash('Learned!', 'Now try forehands and backhands.', 70);
+    } else flash('Got it', teaching + ' more forehand' + (teaching > 1 ? 's' : ''), 50);
+    return;
+  }
+
+  let type;
+  if (forehand) {
+    const dot = u[0] * forehand[0] + u[1] * forehand[1] + u[2] * forehand[2];
+    type = dot >= 0 ? 'Forehand' : 'Backhand';
+  } else {
+    let i = 0; for (let k = 1; k < 3; k++) if (Math.abs(u[k]) > Math.abs(u[i])) i = k;
+    type = 'Swing ' + AX[i] + (u[i] >= 0 ? '+' : '−');
+  }
+  const power = Math.min(100, Math.round(s.peak / 15));      // ~1500°/s ≈ 100%
+  count++;
+  $('count').textContent = count + ' swing' + (count > 1 ? 's' : '');
+  flash(type, 'Power ' + power + '% · peak ' + Math.round(s.peak) + '°/s', power);
+  const li = document.createElement('li');
+  li.textContent = type + ': power ' + power + '%, ' + Math.round(s.peak) + '°/s' + (s.acc ? ', ' + s.acc.toFixed(1) + ' m/s²' : '');
+  $('log').prepend(li);
+  while ($('log').children.length > 30) $('log').lastChild.remove();
+}
+
+function flash(title, info, power) {
+  $('shot').textContent = title; $('shotInfo').textContent = info;
+  const p = $('panel'); p.classList.add('flash'); setTimeout(() => p.classList.remove('flash'), 180);
+  try { navigator.vibrate && navigator.vibrate(40); } catch (e) {}
+  if (audio) {
+    try {
+      const o = audio.createOscillator(), gn = audio.createGain();
+      o.frequency.value = 300 + power * 6; gn.gain.setValueAtTime(0.25, audio.currentTime);
+      gn.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.12);
+      o.connect(gn).connect(audio.destination); o.start(); o.stop(audio.currentTime + 0.13);
+    } catch (e) {}
+  }
+}
+
+// Draw live numbers + sparkline each frame
+const cv = $('spark'), ctx = cv.getContext('2d');
+const sizeCanvas = () => { const d = window.devicePixelRatio || 1; cv.width = cv.clientWidth * d; cv.height = cv.clientHeight * d; };
+const ro = new ResizeObserver(sizeCanvas); ro.observe(cv);
+const fmt = v => (Math.abs(v) < 10 ? v.toFixed(1) : Math.round(v)).toString();
+
+function frame() {
+  $('ra').textContent = fmt(live.a); $('rb').textContent = fmt(live.b); $('rg').textContent = fmt(live.g);
+  $('ax').textContent = fmt(live.x); $('ay').textContent = fmt(live.y); $('az').textContent = fmt(live.z);
+  if (dtAvg) $('rate').textContent = 'Sensor rate: about ' + Math.round(1000 / dtAvg) + ' readings per second';
+
+  const W = cv.width, H = cv.height, max = 1500, L = hist.length;
+  ctx.clearRect(0, 0, W, H);
+  const ty = H - (threshold / max) * H;
+  ctx.strokeStyle = '#d9f24b'; ctx.setLineDash([6, 6]); ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(0, ty); ctx.lineTo(W, ty); ctx.stroke(); ctx.setLineDash([]);
+  ctx.strokeStyle = '#f3f7fa'; ctx.lineWidth = 2 * (window.devicePixelRatio || 1);
+  ctx.beginPath();
+  for (let i = 0; i < L; i++) {
+    const v = Math.min(max, hist[(hi + i) % L]);
+    const x = (i / (L - 1)) * W, y = H - (v / max) * H;
+    i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+  }
+  ctx.stroke();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+}
+</script>
+</body>
+</html>
