@@ -108,7 +108,7 @@ body{background:#0b2233;color:var(--ink);font:18px/1.4 system-ui,-apple-system,"
 </div>
 
 <div id="aim" hidden></div>
-<div id="foot"><span id="keylog"></span> · v8 · first to 3 games</div>
+<div id="foot"><span id="keylog"></span> · v9 · first to 3 games</div>
 
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
@@ -509,7 +509,7 @@ const evlog = [];
 function logEv(t) { evlog.push(t); if (evlog.length > 6) evlog.shift(); $('keylog').textContent = evlog.join('  '); }
 const keyKind = e => {
   const k = e.key, c = e.keyCode;
-  if (k === 'Enter' || k === ' ' || k === 'Select' || k === 'Accept' || c === 13 || c === 23 || c === 32 || c === 66) return 'ok';
+  if (k === 'Enter' || k === ' ' || k === 'Select' || k === 'Accept' || c === 13 || c === 23 || c === 32 || c === 66 || c === 96 || c === 99) return 'ok';   // 96/99 = gamepad A/X on Android
   if (k === 'ArrowLeft' || c === 37 || c === 21) return 'L';
   if (k === 'ArrowRight' || c === 39 || c === 22) return 'R';
   if (k === 'ArrowUp' || c === 38 || c === 19) return 'U';
@@ -552,6 +552,23 @@ document.addEventListener('keyup', e => {
 }, true);
 document.addEventListener('keypress', e => { if (keyKind(e)) { e.preventDefault(); e.stopPropagation(); } }, true);
 cv.addEventListener('click', () => { logEv('click'); if (kbdMode) press('ok', 'click'); });
+// ---------- Game controller / joystick: A (or any face button) = OK, d-pad or stick = arrows ----------
+const padPrev = {};
+function pollPads() {
+  let pads = [];
+  try { pads = navigator.getGamepads ? Array.from(navigator.getGamepads()) : []; } catch (e) {}
+  pads.forEach(p => {
+    if (!p) return;
+    const b = i => !!(p.buttons[i] && p.buttons[i].pressed), ax = p.axes || [];
+    const cur = { ok: b(0) || b(1) || b(2) || b(3) || b(5) || b(7), U: b(12) || ax[1] < -0.6, D: b(13) || ax[1] > 0.6, L: b(14) || ax[0] < -0.6, R: b(15) || ax[0] > 0.6 };
+    const prev = padPrev[p.index] || {};
+    for (const k of ['ok', 'U', 'D', 'L', 'R']) if (cur[k] && !prev[k]) { logEv('pad ' + k); press(k, 'pad'); }
+    padPrev[p.index] = cur;
+  });
+  requestAnimationFrame(pollPads);
+}
+window.addEventListener('gamepadconnected', e => { logEv('pad connected'); if (!kbdMode) startKeyMode(); pill('Joystick', true); });
+requestAnimationFrame(pollPads);
 try { document.body.tabIndex = -1; document.body.focus({ preventScroll: true }); window.focus(); } catch (e) {}   // page, not the toolbar, gets the remote
 
 window.SwingTennis = { get state() { return state; }, get pts() { return pts; }, get games() { return games; }, get ball() { return ball; }, swingStart, applyFinal, pointTo, startMatch };
