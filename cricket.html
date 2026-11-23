@@ -50,6 +50,20 @@ body{background:var(--deep);color:var(--ink);font:18px/1.4 system-ui,-apple-syst
 #aim b{color:var(--ball)}
 #aim small{display:block;font-size:.6em;color:var(--mute);font-weight:700}
 #foot{position:fixed;bottom:10px;left:16px;font-size:13px;color:var(--mute);pointer-events:none;max-width:60vw}
+
+/* TV menu + safe-area layout (v7) */
+.hud{top:clamp(14px,4vh,40px)!important;left:clamp(14px,4vw,56px)!important;right:clamp(14px,4vw,56px)!important}
+.ctrl button,.ctrl select{display:none}
+#aim{left:auto!important;right:clamp(14px,4vw,56px);top:calc(clamp(14px,4vh,40px) + 56px);bottom:auto!important;transform:none!important;text-align:right}
+#menu{position:fixed;inset:0;display:grid;place-items:center;background:rgba(5,14,22,.72);padding:16px;z-index:5}
+#menu[hidden]{display:none}
+.menucard{background:var(--deep);border:1px solid var(--line);border-radius:22px;padding:clamp(12px,2.6vh,28px) clamp(16px,3vw,30px);display:grid;gap:clamp(4px,1vh,10px);width:min(460px,100%);max-height:94vh;overflow:auto;text-align:center}
+.menucard .mute{font-size:clamp(12px,2.4vh,15px)}
+.menucard h1{font-size:clamp(22px,5vh,42px);line-height:1.05}
+.mlist{display:grid;gap:clamp(4px,1vh,8px);margin-top:4px}
+.mlist button{font:inherit;font-weight:800;font-size:clamp(14px,3.2vh,22px);background:rgba(255,255,255,.06);color:var(--ink);border:2px solid var(--line);border-radius:12px;padding:clamp(4px,1vh,10px) 14px;min-height:clamp(34px,6.6vh,46px);cursor:pointer}
+.mlist button.on{background:var(--ball);color:#111;border-color:var(--ball)}
+#foot{bottom:clamp(8px,2.5vh,24px)!important;left:clamp(14px,4vw,56px)!important;transform:none!important;font-size:12px!important;max-width:40vw!important}
 @media (prefers-reduced-motion:reduce){#msg{transition:none}}
 </style>
 </head>
@@ -76,6 +90,15 @@ body{background:var(--deep);color:var(--ink);font:18px/1.4 system-ui,-apple-syst
 
 <div id="msg" aria-live="polite"></div>
 
+<div id="menu" hidden>
+  <div class="menucard">
+    <h1 id="mTitle"></h1>
+    <p class="mute" id="mSub"></p>
+    <div class="mlist" id="mlist"></div>
+    <p class="mute">↑ ↓ to choose · OK to select</p>
+  </div>
+</div>
+
 <div id="join">
   <div class="joincard">
     <h1>Swing Cricket</h1>
@@ -90,7 +113,7 @@ body{background:var(--deep);color:var(--ink);font:18px/1.4 system-ui,-apple-syst
 </div>
 
 <div id="aim" hidden></div>
-<div id="foot"><span id="keylog"></span> · v6 · Phone: early swing = leg side · on time = straight · late = off side</div>
+<div id="foot"><span id="keylog"></span> · v7</div>
 
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
@@ -189,6 +212,7 @@ function updateBoard() {
 
 function startInnings() {
   clearTimeout(nextTimer); clearTimeout(pendingTimer);
+  hideMenu();
   const f = FORMATS[fmt], d = DIFF[diff];
   inn = { runs: 0, wkts: 0, balls: 0, maxB: f.balls, maxW: f.wkts, target: Math.round(d.target * f.mult), log: [] };
   del = shot = pending = null; state = 'after'; updateBoard();
@@ -288,11 +312,13 @@ function afterBall(big, small, symbol) {
   inn.balls++; inn.log.push(symbol);
   if (inn.runs >= inn.target) {
     state = 'over'; updateBoard();
-    say('You won the chase!', inn.runs + '/' + inn.wkts + ' in ' + overs(inn.balls) + ' overs · swing to play again', 0); sWin(); return;
+    say('You won!', '', 1400); sWin();
+    setTimeout(() => { if (state === 'over') showMenu('You won the chase!', inn.runs + '/' + inn.wkts + ' in ' + overs(inn.balls) + ' overs'); }, 1500); return;
   }
   if (inn.wkts >= inn.maxW || inn.balls >= inn.maxB) {
     state = 'over'; updateBoard();
-    say(big + ' · Computer wins', 'Short by ' + (inn.target - inn.runs) + ' · swing to play again', 0); return;
+    say(big, '', 1400);
+    setTimeout(() => { if (state === 'over') showMenu('Computer wins', 'Short by ' + (inn.target - inn.runs) + ' run' + (inn.target - inn.runs === 1 ? '' : 's')); }, 1500); return;
   }
   state = 'after'; updateBoard();
   say(big, small || needText(), 1900);
@@ -389,7 +415,7 @@ function drawHelper(now) {
   if (ready) { ctx.fillStyle = '#ffd23f'; ctx.font = '900 ' + Math.round(clamp(W * 0.03, 18, 46)) + 'px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.fillText('SWING!', p.x, p.y - r - 12); }
 }
 function minimap(now) {
-  const m = clamp(Math.min(W, H) * 0.2, 110, 190), cx = W - m * 0.6 - 16, cy = H - m * 0.6 - 16, sc = m * 0.55 / R;
+  const m = clamp(Math.min(W, H) * 0.2, 100, 190), cx = W - m * 0.6 - Math.max(16, W * 0.04), cy = H - m * 0.6 - Math.max(16, H * 0.05), sc = m * 0.55 / R;
   const toM = (x, z) => [cx + x * sc, cy - (z - 0.5) * sc];
   ctx.fillStyle = 'rgba(7,20,30,.75)'; ctx.beginPath(); ctx.arc(cx, cy, m * 0.6, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = '#2f7d3b'; ctx.beginPath(); ctx.arc(cx, cy, R * sc, 0, Math.PI * 2); ctx.fill();
@@ -449,7 +475,7 @@ function connectStart() {
   peer.on('connection', c => {
     if (conn && conn.open) conn.close();
     conn = c;
-    c.on('open', () => { pings = []; $('join').hidden = true; pill('Phone connected', true); if (state === 'idle' || state === 'over') say('Swing to start!', 'Hold the phone like a bat handle', 0); });
+    c.on('open', () => { pings = []; $('join').hidden = true; pill('Phone connected', true); if (state === 'idle' || state === 'over') showMenu('Phone connected', 'Swing to start · hold the phone like a bat handle'); });
     c.on('data', onData);
     c.on('close', () => { if (conn === c) { conn = null; pill('Phone disconnected'); if (!kbdMode) $('join').hidden = false; setStatus('Phone disconnected. Waiting…'); } });
   });
@@ -480,14 +506,40 @@ function showAim() {
   $('aim').innerHTML = '<b>' + a + '</b> · ' + l + '<small>OK = swing · ← → aim · ↑ go big · ↓ play safe</small>';
 }
 function startKeyMode() {
-  kbdMode = true; store('mode', 'remote'); $('mode').textContent = 'Controller: TV remote'; $('join').hidden = true; $('aim').hidden = false; unlock(); showAim();
+  kbdMode = true; store('mode', 'remote'); if (!(conn && conn.open)) pill('TV remote', true); $('mode').textContent = 'Controller: TV remote'; $('join').hidden = true; $('aim').hidden = false; unlock(); showAim();
   try { if (document.activeElement) document.activeElement.blur(); } catch (e) {}
-  if (state === 'idle' || state === 'over') say('Press OK to start', 'Then press OK when the ball reaches you', 0);
+  if (state === 'idle' || state === 'over') showMenu('Swing Cricket', 'Press OK when the ball reaches you');
 }
+
+// ---------- TV menu (↑ ↓ + OK) ----------
+let mIdx = 0;
+function renderMenu() {
+  const list = $('mlist'); list.innerHTML = '';
+  MENU.forEach((m, i) => { const b = document.createElement('button'); b.textContent = m.label(); b.className = i === mIdx ? 'on' : ''; b.dataset.i = i; list.appendChild(b); });
+}
+function showMenu(title, sub) {
+  $('mTitle').textContent = title; $('mSub').textContent = sub || ''; mIdx = 0; renderMenu();
+  msg.classList.remove('show'); $('join').hidden = true; $('menu').hidden = false;
+}
+function hideMenu() { $('menu').hidden = true; }
+$('mlist').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; mIdx = +b.dataset.i; MENU[mIdx].act(); if (!$('menu').hidden) renderMenu(); });
+const toggleSound = () => { if (soundOn) { soundOn = false; $('sound').textContent = 'Sound off'; } else unlock(); };
+const toggleFull = () => { try { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen(); } catch (e) {} };
+const MENU = [
+  { label: () => (state === 'over' ? 'Play again' : 'Play'), act: () => { hideMenu(); startInnings(); } },
+  { label: () => 'Difficulty: ' + DIFF[diff].name, act: () => { diff = (diff + 1) % DIFF.length; store('diff', diff); } },
+  { label: () => 'Format: ' + FORMATS[fmt].name, act: () => { fmt = (fmt + 1) % FORMATS.length; store('fmt', fmt); } },
+  { label: () => 'Batting: ' + (right ? 'Right-handed' : 'Left-handed'), act: () => { right = !right; store('right', right); } },
+  { label: () => 'Helpers: ' + (helpers ? 'On' : 'Off'), act: () => { helpers = !helpers; store('help', helpers); } },
+  { label: () => 'Sound: ' + (soundOn ? 'On' : 'Off'), act: toggleSound },
+  { label: () => 'Controller: ' + (kbdMode ? 'TV remote' : 'Phone'), act: () => (kbdMode ? startPhoneMode() : startKeyMode()) },
+  { label: () => 'Full screen', act: toggleFull },
+];
 $('kbd').addEventListener('click', startKeyMode);
 function startPhoneMode() {
-  kbdMode = false; store('mode', 'phone'); $('mode').textContent = 'Controller: Phone'; $('aim').hidden = true;
-  if (!(conn && conn.open)) { $('join').hidden = false; try { $('kbd').focus(); } catch (e) {} }
+  kbdMode = false; store('mode', 'phone'); if (!(conn && conn.open)) pill('No phone'); $('mode').textContent = 'Controller: Phone'; $('aim').hidden = true;
+  if (!(conn && conn.open)) { hideMenu(); $('join').hidden = false; try { $('kbd').focus(); } catch (e) {} }
+  else showMenu('Phone connected', 'Swing to start');
 }
 $('mode').addEventListener('click', () => (kbdMode ? startPhoneMode() : startKeyMode()));
 let sawOkDown = false;
@@ -505,6 +557,13 @@ document.addEventListener('keydown', e => {
   if (!(ok || L || Rt || U || Dn)) return;
   e.preventDefault(); e.stopPropagation();   // keep the browser from scrolling or moving focus
   if (e.repeat) return;
+  if (!$('menu').hidden) {
+    if (U) mIdx = (mIdx + MENU.length - 1) % MENU.length;
+    if (Dn) mIdx = (mIdx + 1) % MENU.length;
+    if (ok) MENU[mIdx].act();
+    if (!$('menu').hidden) renderMenu();
+    return;
+  }
   if (!$('join').hidden || !kbdMode) { startKeyMode(); return; }
   if (L) aim = aim === -1 ? 0 : -1;
   if (Rt) aim = aim === 1 ? 0 : 1;

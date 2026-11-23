@@ -46,6 +46,20 @@ body{background:#0b2233;color:var(--ink);font:18px/1.4 system-ui,-apple-system,"
 #aim b{color:var(--ball)}
 #aim small{display:block;font-size:.6em;color:var(--mute);font-weight:700}
 #foot{position:fixed;bottom:10px;left:50%;transform:translateX(-50%);font-size:13px;color:var(--mute);pointer-events:none;text-align:center;width:max-content;max-width:94vw}
+
+/* TV menu + safe-area layout (v7) */
+.hud{top:clamp(14px,4vh,40px)!important;left:clamp(14px,4vw,56px)!important;right:clamp(14px,4vw,56px)!important}
+.ctrl button,.ctrl select{display:none}
+#aim{left:auto!important;right:clamp(14px,4vw,56px);top:calc(clamp(14px,4vh,40px) + 56px);bottom:auto!important;transform:none!important;text-align:right}
+#menu{position:fixed;inset:0;display:grid;place-items:center;background:rgba(5,14,22,.72);padding:16px;z-index:5}
+#menu[hidden]{display:none}
+.menucard{background:var(--deep);border:1px solid var(--line);border-radius:22px;padding:clamp(12px,2.6vh,28px) clamp(16px,3vw,30px);display:grid;gap:clamp(4px,1vh,10px);width:min(460px,100%);max-height:94vh;overflow:auto;text-align:center}
+.menucard .mute{font-size:clamp(12px,2.4vh,15px)}
+.menucard h1{font-size:clamp(22px,5vh,42px);line-height:1.05}
+.mlist{display:grid;gap:clamp(4px,1vh,8px);margin-top:4px}
+.mlist button{font:inherit;font-weight:800;font-size:clamp(14px,3.2vh,22px);background:rgba(255,255,255,.06);color:var(--ink);border:2px solid var(--line);border-radius:12px;padding:clamp(4px,1vh,10px) 14px;min-height:clamp(34px,6.6vh,46px);cursor:pointer}
+.mlist button.on{background:var(--ball);color:#111;border-color:var(--ball)}
+#foot{bottom:clamp(8px,2.5vh,24px)!important;left:clamp(14px,4vw,56px)!important;transform:none!important;font-size:12px!important;max-width:40vw!important}
 @media (prefers-reduced-motion:reduce){#msg{transition:none}}
 </style>
 </head>
@@ -71,6 +85,15 @@ body{background:#0b2233;color:var(--ink);font:18px/1.4 system-ui,-apple-system,"
 
 <div id="msg" aria-live="polite"></div>
 
+<div id="menu" hidden>
+  <div class="menucard">
+    <h1 id="mTitle"></h1>
+    <p class="mute" id="mSub"></p>
+    <div class="mlist" id="mlist"></div>
+    <p class="mute">↑ ↓ to choose · OK to select</p>
+  </div>
+</div>
+
 <div id="join">
   <div class="joincard">
     <h1>Swing Tennis</h1>
@@ -85,7 +108,7 @@ body{background:#0b2233;color:var(--ink);font:18px/1.4 system-ui,-apple-system,"
 </div>
 
 <div id="aim" hidden></div>
-<div id="foot"><span id="keylog"></span> · v6 · First to 3 games wins</div>
+<div id="foot"><span id="keylog"></span> · v7 · first to 3 games</div>
 
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
@@ -179,7 +202,7 @@ function callScore() {
 }
 
 function startMatch() {
-  clearTimeout(feedTimer);
+  clearTimeout(feedTimer); hideMenu();
   pts = [0, 0]; games = [0, 0]; ball = null; pending = null; updateBoard();
   state = 'point';
   say('Get ready!', 'Computer serves · ' + DIFF[diff].name, 1400);
@@ -204,7 +227,8 @@ function pointTo(i, why) {
     games[i]++; pts = [0, 0];
     if (games[i] >= GAMES) {
       state = 'over'; updateBoard();
-      say(i === 0 ? 'You win the match!' : 'Computer wins the match', 'Games ' + games[0] + '–' + games[1] + ' · swing to play again', 0);
+      say(i === 0 ? 'Game, set, match!' : 'Match over', '', 1400);
+      setTimeout(() => { if (state === 'over') showMenu(i === 0 ? 'You win the match!' : 'Computer wins the match', 'Games ' + games[0] + '–' + games[1]); }, 1500);
       i === 0 ? sWin() : sLose();
       return;
     }
@@ -392,7 +416,7 @@ function connectStart() {
     conn = c;
     c.on('open', () => {
       pings = []; $('join').hidden = true; pill('Phone connected', true);
-      if (state === 'idle' || state === 'over') say('Swing to start!', 'Phone connected', 0);
+      if (state === 'idle' || state === 'over') showMenu('Phone connected', 'Swing to start');
     });
     c.on('data', onData);
     c.on('close', () => { if (conn === c) { conn = null; pill('Phone disconnected'); if (!kbdMode) $('join').hidden = false; setStatus('Phone disconnected. Waiting…'); } });
@@ -432,19 +456,44 @@ function showAim() {
   $('aim').innerHTML = '<b>' + a + '</b> · ' + p + '<small>OK = swing · ← → aim · ↑ power · ↓ soft</small>';
 }
 function startKeyMode() {
-  kbdMode = true; store('mode', 'remote'); $('mode').textContent = 'Controller: TV remote'; $('join').hidden = true; $('aim').hidden = false; unlock(); showAim();
+  kbdMode = true; store('mode', 'remote'); if (!(conn && conn.open)) pill('TV remote', true); $('mode').textContent = 'Controller: TV remote'; $('join').hidden = true; $('aim').hidden = false; unlock(); showAim();
   try { if (document.activeElement) document.activeElement.blur(); } catch (e) {}
-  if (state === 'idle' || state === 'over') say('Press OK to start', 'Then press OK when the ball reaches you', 0);
+  if (state === 'idle' || state === 'over') showMenu('Swing Tennis', 'Press OK when the ball reaches you');
 }
 const keySwing = () => {
   if (!swingStart(performance.now() + delay, true) || !pending) return;
   applyFinal({ type: pending.side, power: keyPow > 0 ? 90 : keyPow < 0 ? 45 : 70 });
   keyAim = 0; keyPow = 0; showAim();
 };
+
+// ---------- TV menu (↑ ↓ + OK) ----------
+let mIdx = 0;
+function renderMenu() {
+  const list = $('mlist'); list.innerHTML = '';
+  MENU.forEach((m, i) => { const b = document.createElement('button'); b.textContent = m.label(); b.className = i === mIdx ? 'on' : ''; b.dataset.i = i; list.appendChild(b); });
+}
+function showMenu(title, sub) {
+  $('mTitle').textContent = title; $('mSub').textContent = sub || ''; mIdx = 0; renderMenu();
+  msg.classList.remove('show'); $('join').hidden = true; $('menu').hidden = false;
+}
+function hideMenu() { $('menu').hidden = true; }
+$('mlist').addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; mIdx = +b.dataset.i; MENU[mIdx].act(); if (!$('menu').hidden) renderMenu(); });
+const toggleSound = () => { if (soundOn) { soundOn = false; $('sound').textContent = 'Sound off'; } else unlock(); };
+const toggleFull = () => { try { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen(); } catch (e) {} };
+const MENU = [
+  { label: () => (state === 'over' ? 'Play again' : 'Play'), act: () => { hideMenu(); startMatch(); } },
+  { label: () => 'Difficulty: ' + DIFF[diff].name, act: () => { diff = (diff + 1) % DIFF.length; store('diff', diff); } },
+  { label: () => 'Playing: ' + (right ? 'Right-handed' : 'Left-handed'), act: () => { right = !right; store('right', right); } },
+  { label: () => 'Helpers: ' + (helpers ? 'On' : 'Off'), act: () => { helpers = !helpers; store('help', helpers); } },
+  { label: () => 'Sound: ' + (soundOn ? 'On' : 'Off'), act: toggleSound },
+  { label: () => 'Controller: ' + (kbdMode ? 'TV remote' : 'Phone'), act: () => (kbdMode ? startPhoneMode() : startKeyMode()) },
+  { label: () => 'Full screen', act: toggleFull },
+];
 $('kbd').addEventListener('click', startKeyMode);
 function startPhoneMode() {
-  kbdMode = false; store('mode', 'phone'); $('mode').textContent = 'Controller: Phone'; $('aim').hidden = true;
-  if (!(conn && conn.open)) { $('join').hidden = false; try { $('kbd').focus(); } catch (e) {} }
+  kbdMode = false; store('mode', 'phone'); if (!(conn && conn.open)) pill('No phone'); $('mode').textContent = 'Controller: Phone'; $('aim').hidden = true;
+  if (!(conn && conn.open)) { hideMenu(); $('join').hidden = false; try { $('kbd').focus(); } catch (e) {} }
+  else showMenu('Phone connected', 'Swing to start');
 }
 $('mode').addEventListener('click', () => (kbdMode ? startPhoneMode() : startKeyMode()));
 let sawOkDown = false;
@@ -462,6 +511,13 @@ document.addEventListener('keydown', e => {
   if (!(ok || L || Rt || U || Dn)) return;
   e.preventDefault(); e.stopPropagation();
   if (e.repeat) return;
+  if (!$('menu').hidden) {
+    if (U) mIdx = (mIdx + MENU.length - 1) % MENU.length;
+    if (Dn) mIdx = (mIdx + 1) % MENU.length;
+    if (ok) MENU[mIdx].act();
+    if (!$('menu').hidden) renderMenu();
+    return;
+  }
   if (!$('join').hidden || !kbdMode) { startKeyMode(); return; }
   if (L) keyAim = keyAim === -1 ? 0 : -1;
   if (Rt) keyAim = keyAim === 1 ? 0 : 1;
