@@ -43,6 +43,10 @@ body{background:var(--deep);color:var(--ink);font:18px/1.4 system-ui,-apple-syst
 #qr:empty{display:none}
 .mute{color:var(--mute);font-size:15px;overflow-wrap:anywhere}
 #status{font-weight:700}
+#aim{position:fixed;left:50%;bottom:clamp(12px,3vh,36px);transform:translateX(-50%);background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:10px 18px;font-weight:800;font-size:clamp(16px,1.8vw,24px);text-align:center;pointer-events:none;max-width:94vw}
+#aim[hidden]{display:none}
+#aim b{color:var(--ball)}
+#aim small{display:block;font-size:.6em;color:var(--mute);font-weight:700}
 #foot{position:fixed;bottom:10px;left:16px;font-size:13px;color:var(--mute);pointer-events:none;max-width:60vw}
 @media (prefers-reduced-motion:reduce){#msg{transition:none}}
 </style>
@@ -77,11 +81,12 @@ body{background:var(--deep);color:var(--ink);font:18px/1.4 system-ui,-apple-syst
     <div id="qr"></div>
     <div class="mute" id="url"></div>
     <div id="status">Starting…</div>
-    <button id="kbd">No phone? Play with the space bar</button>
+    <button id="kbd">No phone? Press OK on the TV remote to play</button>
   </div>
 </div>
 
-<div id="foot">Early swing = leg side · on time = straight · late = off side · space bar = test swing</div>
+<div id="aim" hidden></div>
+<div id="foot">Phone: early swing = leg side · on time = straight · late = off side</div>
 
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
@@ -190,6 +195,7 @@ function startInnings() {
 function nextBall() {
   if (state === 'over') return;
   del = shot = null; state = 'runup'; runStart = performance.now();
+  aim = 0; loft = 0; showAim();
   fielders = BASE_FIELD.map(([x, z]) => [x + rnd(-0.25, 0.25), z + rnd(-0.2, 0.2)]);
   setTimeout(release, 1100);
 }
@@ -235,18 +241,23 @@ function spos(s, t) {
   return { x, z, y, u };
 }
 
-// Called the instant the phone says a swing started
-function swingStart(recv) {
+// Called the instant a swing starts: from the phone (key=false) or the TV remote's OK button (key=true)
+function swingStart(recv, key) {
   swingAt = performance.now();
   if (state === 'idle' || state === 'over') { startInnings(); return false; }
-  if (state !== 'ball' || !del || del.hit) return false;
-  const w = DIFF[diff].win, tS = recv - delay, tA = del.t0 + del.D, off = tS - tA + LEAD;
-  if (off < -EARLY * w) { say('', 'Too early: wait for the ball', 600); return false; }
+  if (state !== 'ball' || !del || del.hit || del.swung) return false;
+  const w = DIFF[diff].win, tS = recv - delay, tA = del.t0 + del.D, off = tS - tA + (key ? KEY_LEAD : LEAD);
+  if (off < -EARLY * w) {
+    if (key) { del.swung = true; say('', 'Too early: swung and missed!', 900); }   // one press per ball, no button mashing
+    else say('', 'Too early: wait for the ball', 600);
+    return false;
+  }
   if (off > LATE * w) return false;
   del.hit = true;
   const now = performance.now(), p = dpos(del, now);
   const q = 1 - Math.min(1, Math.max(0, Math.abs(off) - 40) / ((off < 0 ? EARLY : LATE) * w - 40));
-  const theta = clamp(off / 200, -1, 1) * 48 * Math.PI / 180 * side();
+  let theta = clamp(off / 200, -1, 1) * 48 * Math.PI / 180 * side();
+  if (key && aim) theta = (aim * 34 + clamp(off / 200, -1, 1) * 10) * Math.PI / 180;   // arrow keys aim left/right of screen
   shot = { from: { x: p.x, z: Math.max(0, p.z), y: Math.max(0.05, p.y) }, t0: now, theta, q, power: 60, resolved: false };
   Object.assign(shot, planShot(60));
   pending = { t: now };
@@ -454,12 +465,38 @@ function onData(d) {
 }
 setInterval(() => { if (conn && conn.open) { try { conn.send({ t: 'ping', ts: performance.now() }); } catch (e) {} } }, 1000);
 
-$('kbd').addEventListener('click', () => { kbdMode = true; $('join').hidden = true; unlock(); say('Press space to start', 'Space bar = swing', 0); });
+// ---------- TV remote / keyboard mode ----------
+// OK (Enter) = swing · ← → = aim · ↑ = go big (lofted) · ↓ = play safe (along the ground)
+const KEY_LEAD = 20;                     // a button press lands close to the impact moment
+let aim = 0, loft = 0;
+function showAim() {
+  if (!kbdMode) return;
+  const a = aim < 0 ? '← Left side' : aim > 0 ? 'Right side →' : 'Straight';
+  const l = loft > 0 ? 'Go big ↑' : loft < 0 ? 'Play safe ↓' : 'Normal shot';
+  $('aim').innerHTML = '<b>' + a + '</b> · ' + l + '<small>OK = swing · ← → aim · ↑ go big · ↓ play safe</small>';
+}
+function startKeyMode() {
+  kbdMode = true; $('join').hidden = true; $('aim').hidden = false; unlock(); showAim();
+  try { if (document.activeElement) document.activeElement.blur(); } catch (e) {}
+  if (state === 'idle' || state === 'over') say('Press OK to start', 'Then press OK when the ball reaches you', 0);
+}
+$('kbd').addEventListener('click', startKeyMode);
 document.addEventListener('keydown', e => {
-  if (e.code !== 'Space' || e.repeat) return;
-  e.preventDefault(); if (!audio) unlock();
-  if (swingStart(performance.now() + delay)) setTimeout(() => applyFinal({ power: 75 }), 120);
-});
+  const k = e.key, c = e.keyCode;
+  const ok = k === 'Enter' || k === ' ' || k === 'Select' || c === 13 || c === 23 || c === 32;
+  const L = k === 'ArrowLeft' || c === 37, Rt = k === 'ArrowRight' || c === 39, U = k === 'ArrowUp' || c === 38, Dn = k === 'ArrowDown' || c === 40;
+  if (!(ok || L || Rt || U || Dn)) return;
+  e.preventDefault(); e.stopPropagation();   // keep the browser from scrolling or moving focus
+  if (e.repeat) return;
+  if (!$('join').hidden || !kbdMode) { startKeyMode(); return; }
+  if (L) aim = aim === -1 ? 0 : -1;
+  if (Rt) aim = aim === 1 ? 0 : 1;
+  if (U) loft = loft === 1 ? 0 : 1;
+  if (Dn) loft = loft === -1 ? 0 : -1;
+  showAim();
+  if (ok && swingStart(performance.now() + delay, true)) applyFinal({ power: loft > 0 ? 88 : loft < 0 ? 52 : 66 });
+}, true);
+cv.addEventListener('click', () => { if (kbdMode && swingStart(performance.now() + delay, true)) applyFinal({ power: loft > 0 ? 88 : loft < 0 ? 52 : 66 }); });
 
 window.SwingCricket = { get state() { return state; }, get inn() { return inn; }, get del() { return del; }, get shot() { return shot; }, swingStart, applyFinal, startInnings };
 connectStart();

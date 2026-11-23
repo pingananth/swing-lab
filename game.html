@@ -39,6 +39,10 @@ body{background:#0b2233;color:var(--ink);font:18px/1.4 system-ui,-apple-system,"
 #qr:empty{display:none}
 .mute{color:var(--mute);font-size:15px;overflow-wrap:anywhere}
 #status{font-weight:700}
+#aim{position:fixed;left:50%;bottom:clamp(30px,4vh,44px);transform:translateX(-50%);background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:10px 18px;font-weight:800;font-size:clamp(16px,1.8vw,24px);text-align:center;pointer-events:none;max-width:94vw}
+#aim[hidden]{display:none}
+#aim b{color:var(--ball)}
+#aim small{display:block;font-size:.6em;color:var(--mute);font-weight:700}
 #foot{position:fixed;bottom:10px;left:50%;transform:translateX(-50%);font-size:13px;color:var(--mute);pointer-events:none;text-align:center;width:max-content;max-width:94vw}
 @media (prefers-reduced-motion:reduce){#msg{transition:none}}
 </style>
@@ -72,11 +76,12 @@ body{background:#0b2233;color:var(--ink);font:18px/1.4 system-ui,-apple-system,"
     <div id="qr"></div>
     <div class="mute" id="url"></div>
     <div id="status">Starting…</div>
-    <button id="kbd">No phone? Play with the space bar</button>
+    <button id="kbd">No phone? Press OK on the TV remote to play</button>
   </div>
 </div>
 
-<div id="foot">First to 3 games wins · Space bar = test swing</div>
+<div id="aim" hidden></div>
+<div id="foot">First to 3 games wins</div>
 
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
@@ -208,19 +213,24 @@ function pointTo(i, why) {
 }
 
 // Called the instant the phone says a swing started. recv = arrival time on this screen.
-function swingStart(recv) {
+function swingStart(recv, key) {
   swingAt = performance.now();
   if (state === 'idle' || state === 'over') { startMatch(); return false; }
-  if (state !== 'rally' || !ball || ball.by !== 'cpu' || ball.hit) return false;
-  const tS = recv - delay, tA = ball.t0 + ball.D, off = tS - tA + LEAD;
-  if (off < -EARLY) { say('', 'Too early: wait for the ball', 700); return false; }
+  if (state !== 'rally' || !ball || ball.by !== 'cpu' || ball.hit || ball.swung) return false;
+  const tS = recv - delay, tA = ball.t0 + ball.D, off = tS - tA + (key ? KEY_LEAD : LEAD);
+  if (off < -EARLY) {
+    if (key) { ball.swung = true; say('', 'Too early: swung and missed!', 900); }   // one press per ball for the remote
+    else say('', 'Too early: wait for the ball', 700);
+    return false;
+  }
   if (off > LATE) return false;                                           // too late, the miss is called in tick()
   const side = sideOf(ball.x1), sign = Math.sign(ball.x1) || 1;
   ball.hit = true;
   pending = { t: performance.now(), side };
   const now = performance.now(), p = bpos(ball, now);
   const aim = clamp(off / 180, -1, 1);                                    // early pulls cross-court, late goes down the line
-  const tx = clamp(sign * aim * 0.75 + (Math.random() - 0.5) * 0.2, -0.9, 0.9);
+  let tx = clamp(sign * aim * 0.75 + (Math.random() - 0.5) * 0.2, -0.9, 0.9);
+  if (key && keyAim) tx = clamp(keyAim * 0.7 + aim * 0.15, -0.9, 0.9);   // remote arrows aim left/right
   ball = flight(p.x, Math.max(0, p.z), tx, 1, durFor(60), 0.7, Math.max(0.2, p.y), 0.35, 'you');
   ball.pMiss = missChance(60, tx);
   sHit(60);
@@ -407,14 +417,43 @@ function onData(d) {
 }
 setInterval(() => { if (conn && conn.open) { try { conn.send({ t: 'ping', ts: performance.now() }); } catch (e) {} } }, 1000);
 
-// Keyboard test swing: space bar
-$('kbd').addEventListener('click', () => { kbdMode = true; $('join').hidden = true; unlock(); say('Press space to start', 'Space bar = swing', 0); });
+// ---------- TV remote / keyboard mode ----------
+// OK (Enter) = swing · ← → = aim · ↑ = power shot · ↓ = soft shot
+const KEY_LEAD = 20;
+let keyAim = 0, keyPow = 0;
+function showAim() {
+  if (!kbdMode) return;
+  const a = keyAim < 0 ? '← Aim left' : keyAim > 0 ? 'Aim right →' : 'Aim: auto';
+  const p = keyPow > 0 ? 'Power shot ↑' : keyPow < 0 ? 'Soft shot ↓' : 'Normal shot';
+  $('aim').innerHTML = '<b>' + a + '</b> · ' + p + '<small>OK = swing · ← → aim · ↑ power · ↓ soft</small>';
+}
+function startKeyMode() {
+  kbdMode = true; $('join').hidden = true; $('aim').hidden = false; unlock(); showAim();
+  try { if (document.activeElement) document.activeElement.blur(); } catch (e) {}
+  if (state === 'idle' || state === 'over') say('Press OK to start', 'Then press OK when the ball reaches you', 0);
+}
+const keySwing = () => {
+  if (!swingStart(performance.now() + delay, true) || !pending) return;
+  applyFinal({ type: pending.side, power: keyPow > 0 ? 90 : keyPow < 0 ? 45 : 70 });
+  keyAim = 0; keyPow = 0; showAim();
+};
+$('kbd').addEventListener('click', startKeyMode);
 document.addEventListener('keydown', e => {
-  if (e.code !== 'Space' || e.repeat) return;
-  e.preventDefault(); if (!audio) unlock();
-  const hit = swingStart(performance.now() + delay);
-  if (hit && pending) { const side = pending.side; setTimeout(() => applyFinal({ type: side, power: 70 }), 120); }
-});
+  const k = e.key, c = e.keyCode;
+  const ok = k === 'Enter' || k === ' ' || k === 'Select' || c === 13 || c === 23 || c === 32;
+  const L = k === 'ArrowLeft' || c === 37, Rt = k === 'ArrowRight' || c === 39, U = k === 'ArrowUp' || c === 38, Dn = k === 'ArrowDown' || c === 40;
+  if (!(ok || L || Rt || U || Dn)) return;
+  e.preventDefault(); e.stopPropagation();
+  if (e.repeat) return;
+  if (!$('join').hidden || !kbdMode) { startKeyMode(); return; }
+  if (L) keyAim = keyAim === -1 ? 0 : -1;
+  if (Rt) keyAim = keyAim === 1 ? 0 : 1;
+  if (U) keyPow = keyPow === 1 ? 0 : 1;
+  if (Dn) keyPow = keyPow === -1 ? 0 : -1;
+  showAim();
+  if (ok) keySwing();
+}, true);
+cv.addEventListener('click', () => { if (kbdMode) keySwing(); });
 
 window.SwingTennis = { get state() { return state; }, get pts() { return pts; }, get games() { return games; }, get ball() { return ball; }, swingStart, applyFinal, pointTo, startMatch };
 connectStart();
