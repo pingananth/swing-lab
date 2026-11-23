@@ -37,6 +37,8 @@ body{background:var(--deep);color:var(--ink);font:18px/1.4 system-ui,-apple-syst
 #join[hidden]{display:none}
 .joincard{background:var(--deep);border:1px solid var(--line);border-radius:22px;padding:28px;display:grid;gap:12px;justify-items:center;text-align:center;width:min(520px,100%)}
 .joincard h1{font-size:clamp(30px,4vw,46px);line-height:1.05}
+.joincard #kbd{background:var(--ball);color:#111;border:0;font-size:20px;padding:14px 22px}
+.joincard #kbd:focus{outline:4px solid #fff;outline-offset:3px}
 .joincard button{font:inherit;font-weight:700;background:transparent;color:var(--ink);border:1.5px solid var(--line);border-radius:12px;padding:10px 16px;min-height:44px;cursor:pointer}
 #code{font-size:clamp(56px,8vw,96px);font-weight:900;letter-spacing:10px;color:var(--ball);line-height:1}
 #qr{background:#fff;border-radius:12px;padding:10px}
@@ -67,6 +69,7 @@ body{background:var(--deep);color:var(--ink);font:18px/1.4 system-ui,-apple-syst
     <button id="hand">Right-handed</button>
     <button id="help">Helpers on</button>
     <button id="sound">Sound off</button>
+    <button id="mode">Controller: Phone</button>
     <button id="fs">Full screen</button>
   </div>
 </div>
@@ -81,12 +84,13 @@ body{background:var(--deep);color:var(--ink);font:18px/1.4 system-ui,-apple-syst
     <div id="qr"></div>
     <div class="mute" id="url"></div>
     <div id="status">Starting…</div>
-    <button id="kbd">No phone? Press OK on the TV remote to play</button>
+    <button id="kbd">Play with TV remote (press OK)</button>
+    <p class="mute">Phone players: scan the QR code above instead</p>
   </div>
 </div>
 
 <div id="aim" hidden></div>
-<div id="foot">Phone: early swing = leg side · on time = straight · late = off side</div>
+<div id="foot"><span id="keylog"></span> · v6 · Phone: early swing = leg side · on time = straight · late = off side</div>
 
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
@@ -476,14 +480,27 @@ function showAim() {
   $('aim').innerHTML = '<b>' + a + '</b> · ' + l + '<small>OK = swing · ← → aim · ↑ go big · ↓ play safe</small>';
 }
 function startKeyMode() {
-  kbdMode = true; $('join').hidden = true; $('aim').hidden = false; unlock(); showAim();
+  kbdMode = true; store('mode', 'remote'); $('mode').textContent = 'Controller: TV remote'; $('join').hidden = true; $('aim').hidden = false; unlock(); showAim();
   try { if (document.activeElement) document.activeElement.blur(); } catch (e) {}
   if (state === 'idle' || state === 'over') say('Press OK to start', 'Then press OK when the ball reaches you', 0);
 }
 $('kbd').addEventListener('click', startKeyMode);
+function startPhoneMode() {
+  kbdMode = false; store('mode', 'phone'); $('mode').textContent = 'Controller: Phone'; $('aim').hidden = true;
+  if (!(conn && conn.open)) { $('join').hidden = false; try { $('kbd').focus(); } catch (e) {} }
+}
+$('mode').addEventListener('click', () => (kbdMode ? startPhoneMode() : startKeyMode()));
+let sawOkDown = false;
+document.addEventListener('keyup', e => {          // some TV browsers send only key-up for the OK button
+  const c = e.keyCode;
+  if (sawOkDown || !(e.key === 'Enter' || e.key === 'Select' || c === 13 || c === 23)) return;
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+}, true);
 document.addEventListener('keydown', e => {
   const k = e.key, c = e.keyCode;
   const ok = k === 'Enter' || k === ' ' || k === 'Select' || c === 13 || c === 23 || c === 32;
+  $('keylog').textContent = 'Last button: ' + (k || '?') + ' (' + c + ')';
+  if (ok && e.isTrusted) sawOkDown = true;
   const L = k === 'ArrowLeft' || c === 37, Rt = k === 'ArrowRight' || c === 39, U = k === 'ArrowUp' || c === 38, Dn = k === 'ArrowDown' || c === 40;
   if (!(ok || L || Rt || U || Dn)) return;
   e.preventDefault(); e.stopPropagation();   // keep the browser from scrolling or moving focus
@@ -501,6 +518,7 @@ cv.addEventListener('click', () => { if (kbdMode && swingStart(performance.now()
 window.SwingCricket = { get state() { return state; }, get inn() { return inn; }, get del() { return del; }, get shot() { return shot; }, swingStart, applyFinal, startInnings };
 connectStart();
 requestAnimationFrame(tick);
+if (load('mode', 'phone') === 'remote') startKeyMode(); else { try { $('kbd').focus(); } catch (e) {} }
 }
 </script>
 </body>
